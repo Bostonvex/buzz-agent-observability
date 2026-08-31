@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/buzz-agent-observability/event-schema-v1.json",
+  "title": "Buzz Agent Observability event v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "event_id", "event_type", "observed_at",
+    "monotonic_offset_ms", "producer", "agent", "harness", "model",
+    "endpoint_id", "session_id", "turn_id", "span_id", "parent_span_id",
+    "attributes"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "event_id": { "type": "string", "format": "uuid" },
+    "event_type": {
+      "enum": [
+        "process.started", "process.exited", "session.started", "session.ended",
+        "turn.started", "turn.first_activity", "turn.first_visible_text",
+        "turn.first_tool", "turn.stall", "turn.completed", "turn.failed",
+        "turn.cancelled", "tool.started", "tool.updated", "tool.completed",
+        "tool.failed", "usage.updated", "model.request_started",
+        "model.first_token", "model.completed", "model.failed",
+        "collector.dropped_events", "protocol.anomaly", "server.sample",
+        "hardware.sample"
+      ]
+    },
+    "observed_at": { "type": "string", "format": "date-time" },
+    "monotonic_offset_ms": { "type": "number", "minimum": 0 },
+    "producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "instance_id"],
+      "properties": {
+        "name": { "type": "string", "maxLength": 128 },
+        "version": { "type": "string", "maxLength": 64 },
+        "instance_id": { "type": "string", "maxLength": 128 }
+      }
+    },
+    "agent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "display_name"],
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "display_name": { "type": "string", "maxLength": 128 }
+      }
+    },
+    "harness": { "$ref": "#/$defs/nullableIdentifier" },
+    "model": { "$ref": "#/$defs/nullableIdentifier" },
+    "endpoint_id": { "$ref": "#/$defs/nullableIdentifier" },
+    "session_id": { "$ref": "#/$defs/nullableIdentifier" },
+    "turn_id": { "$ref": "#/$defs/nullableIdentifier" },
+    "span_id": { "$ref": "#/$defs/nullableIdentifier" },
+    "parent_span_id": { "$ref": "#/$defs/nullableIdentifier" },
+    "attributes": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "measurement_quality": { "enum": ["exact", "derived", "estimated", "unavailable"] },
+        "harness_version": { "$ref": "#/$defs/safeString" },
+        "signal": { "$ref": "#/$defs/safeString" },
+        "outcome": { "$ref": "#/$defs/safeString" },
+        "turn_class": { "$ref": "#/$defs/safeString" },
+        "temperature_profile": { "$ref": "#/$defs/safeString" },
+        "update_kind": { "$ref": "#/$defs/safeString" },
+        "tool_kind": { "$ref": "#/$defs/safeString" },
+        "status": { "$ref": "#/$defs/safeString" },
+        "error_category": { "$ref": "#/$defs/safeString" },
+        "error_code": { "$ref": "#/$defs/safeString" },
+        "token_kind": { "$ref": "#/$defs/safeString" },
+        "semantics": { "$ref": "#/$defs/safeString" },
+        "anomaly_kind": { "$ref": "#/$defs/safeString" },
+        "metric_name": { "$ref": "#/$defs/safeString" },
+        "unit": { "$ref": "#/$defs/safeString" },
+        "provider_id": { "$ref": "#/$defs/safeString" },
+        "node_id": { "$ref": "#/$defs/safeString" },
+        "correlation": { "enum": ["exact", "ambiguous", "unavailable"] },
+        "elapsed_ms": { "$ref": "#/$defs/nonNegativeNumber" },
+        "gap_ms": { "$ref": "#/$defs/nonNegativeNumber" },
+        "threshold_ms": { "$ref": "#/$defs/nonNegativeNumber" },
+        "duration_ms": { "$ref": "#/$defs/nonNegativeNumber" },
+        "decode_ms": { "$ref": "#/$defs/nonNegativeNumber" },
+        "ttfa_ms": { "$ref": "#/$defs/nonNegativeNumber" },
+        "ttfvt_ms": { "$ref": "#/$defs/nonNegativeNumber" },
+        "first_tool_ms": { "$ref": "#/$defs/nonNegativeNumber" },
+        "max_stall_ms": { "$ref": "#/$defs/nonNegativeNumber" },
+        "value": { "$ref": "#/$defs/nonNegativeNumber" },
+        "exit_code": { "$ref": "#/$defs/nonNegativeInteger" },
+        "tool_count": { "$ref": "#/$defs/nonNegativeInteger" },
+        "http_status": { "$ref": "#/$defs/nonNegativeInteger" },
+        "input_tokens": { "$ref": "#/$defs/nonNegativeInteger" },
+        "output_tokens": { "$ref": "#/$defs/nonNegativeInteger" },
+        "cached_tokens": { "$ref": "#/$defs/nonNegativeInteger" },
+        "reasoning_tokens": { "$ref": "#/$defs/nonNegativeInteger" },
+        "dropped_count": { "$ref": "#/$defs/nonNegativeInteger" },
+        "queue_depth": { "$ref": "#/$defs/nonNegativeInteger" },
+        "line_bytes": { "$ref": "#/$defs/nonNegativeInteger" }
+      }
+    }
+  },
+  "$defs": {
+    "nullableIdentifier": {
+      "type": ["string", "null"],
+      "maxLength": 256
+    },
+    "safeString": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "nonNegativeNumber": { "type": "number", "minimum": 0 },
+    "nonNegativeInteger": { "type": "integer", "minimum": 0 }
+  }
+}

@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <title>Buzz Agent Observability</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <p class="eyebrow">LOCAL TELEMETRY / PHASE 1</p>
+          <h1>Buzz Agent Observability</h1>
+          <p class="lede">Metadata-only visibility into agent turns. No prompts, responses, tool payloads, or paths.</p>
+        </div>
+        <div id="health" class="health"><span class="dot"></span><span>Connecting</span></div>
+      </header>
+
+      <section class="metrics" aria-label="Collector health">
+        <article><span>Events</span><strong id="event-count">—</strong></article>
+        <article><span>Agents</span><strong id="agent-count">—</strong></article>
+        <article><span>Turns</span><strong id="turn-count">—</strong></article>
+        <article><span>SQLite</span><strong id="journal-mode">—</strong></article>
+      </section>
+
+      <section>
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">FLEET</p>
+            <h2>Observed agents</h2>
+          </div>
+          <span id="last-updated">Waiting for telemetry</span>
+        </div>
+        <div class="table-shell">
+          <table>
+            <thead>
+              <tr><th>Agent</th><th>State</th><th>Harness</th><th>Model</th><th>Last seen</th></tr>
+            </thead>
+            <tbody id="agents-body">
+              <tr><td colspan="5" class="empty">No agents observed. Load the safe synthetic demo or connect an observer.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section>
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">RECENT</p>
+            <h2>Turns</h2>
+          </div>
+        </div>
+        <div class="table-shell">
+          <table>
+            <thead>
+              <tr><th>Agent</th><th>Outcome</th><th>TTFA</th><th>Visible text</th><th>Duration</th></tr>
+            </thead>
+            <tbody id="turns-body">
+              <tr><td colspan="5" class="empty">No turns stored yet.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+    <script src="/app.js" defer></script>
+  </body>
+</html>
