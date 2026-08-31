@@ -6,6 +6,7 @@ import subprocess
 import tempfile
 import threading
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -127,6 +128,58 @@ class CollectorServerTests(unittest.TestCase):
     def test_non_loopback_bind_is_refused(self) -> None:
         with self.assertRaisesRegex(ValueError, "loopback"):
             create_server(host="0.0.0.0", port=0, state=self.state)
+
+    def test_filtered_summary_agent_turn_and_csv_queries(self) -> None:
+        submitted = [
+            event("turn.started", observed_at="2026-08-31T12:00:00Z"),
+            event(
+                "turn.completed",
+                observed_at="2026-08-31T12:00:01Z",
+                attributes={
+                    "duration_ms": 1000,
+                    "ttfa_ms": 100,
+                    "ttfvt_ms": 175,
+                    "first_tool_ms": 240,
+                    "max_stall_ms": 80,
+                    "tool_count": 1,
+                    "measurement_quality": "exact",
+                    "outcome": "completed",
+                },
+            ),
+        ]
+        status, _ = self._request(
+            "/api/v1/events",
+            data=json.dumps(submitted).encode("utf-8"),
+            token=self.token,
+        )
+        self.assertEqual(status, 202)
+
+        status, summary = self._request("/api/v1/summary?harness=deepseek")
+        self.assertEqual(status, 200)
+        self.assertEqual(summary["fleet"]["metrics"]["duration_ms"]["p95"], 1000)
+        status, agent = self._request("/api/v1/agents/agent-alpha/summary")
+        self.assertEqual(status, 200)
+        self.assertEqual(agent["aggregate"]["turn_count"], 1)
+        status, turn = self._request("/api/v1/turns/turn-alpha")
+        self.assertEqual(status, 200)
+        self.assertEqual(turn["turn"]["first_tool_ms"], 240)
+
+        with urlopen(self.url + "/api/v1/export.csv?outcome=completed", timeout=2) as response:
+            exported = response.read().decode("utf-8")
+        self.assertIn("measurement_quality", exported)
+        self.assertIn("turn-alpha", exported)
+
+    def test_invalid_and_excessive_date_ranges_are_bounded(self) -> None:
+        status, response = self._request("/api/v1/summary?since=not-a-date")
+        self.assertEqual(status, 400)
+        self.assertEqual(response["error"]["code"], "invalid_since")
+        since = (datetime.now(timezone.utc) - timedelta(days=181)).isoformat().replace("+00:00", "Z")
+        until = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        status, response = self._request(
+            f"/api/v1/summary?since={since}&until={until}"
+        )
+        self.assertEqual(status, 400)
+        self.assertEqual(response["error"]["code"], "date_range_too_large")
 
     def test_node_observer_delivers_schema_valid_events_over_http(self) -> None:
         token_path = Path(self.temporary.name) / "observer-token"

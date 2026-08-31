@@ -3,18 +3,21 @@
 from __future__ import annotations
 
 import hmac
+import io
 import json
 import logging
 import mimetypes
 import queue
 import threading
 import time
+import csv
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from collector import __version__
 from collector.schema import EventValidationError, validate_batch
@@ -24,6 +27,9 @@ LOGGER = logging.getLogger("buzz_observability")
 MAX_BODY_BYTES = 256 * 1024
 MAX_BATCH_EVENTS = 100
 MAX_QUERY_ROWS = 500
+MAX_QUERY_OFFSET = 100_000
+MAX_QUERY_RANGE_SECONDS = 180 * 24 * 60 * 60
+FILTER_KEYS = {"agent": "agent_id", "harness": "harness", "model": "model", "endpoint": "endpoint_id", "outcome": "outcome"}
 
 
 class SseBroker:
@@ -102,6 +108,73 @@ def _bounded_limit(query: dict[str, list[str]], default: int = 100) -> int:
         return default
 
 
+def _bounded_offset(query: dict[str, list[str]]) -> int:
+    try:
+        return max(0, min(MAX_QUERY_OFFSET, int(query.get("offset", ["0"])[0])))
+    except ValueError:
+        return 0
+
+
+def _parse_datetime(value: str, name: str) -> tuple[str, datetime]:
+    if len(value) > 40:
+        raise ValueError(f"invalid_{name}")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise ValueError(f"invalid_{name}") from error
+    if parsed.tzinfo is None:
+        raise ValueError(f"invalid_{name}")
+    utc = parsed.astimezone(timezone.utc)
+    return utc.isoformat(timespec="milliseconds").replace("+00:00", "Z"), utc
+
+
+def _query_filters(query: dict[str, list[str]]) -> dict[str, str]:
+    filters: dict[str, str] = {}
+    parsed_dates: dict[str, datetime] = {}
+    for name in ("since", "until"):
+        value = query.get(name, [None])[0]
+        if value:
+            normalized, parsed = _parse_datetime(value, name)
+            filters[name] = normalized
+            parsed_dates[name] = parsed
+    now = datetime.now(timezone.utc)
+    if "since" not in parsed_dates and "until" not in parsed_dates:
+        default_since = now - timedelta(days=30)
+        filters["since"] = default_since.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+        parsed_dates["since"] = default_since
+    elif "until" in parsed_dates and "since" not in parsed_dates:
+        default_since = parsed_dates["until"] - timedelta(seconds=MAX_QUERY_RANGE_SECONDS)
+        filters["since"] = default_since.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+        parsed_dates["since"] = default_since
+    range_end = parsed_dates.get("until", now)
+    if "since" in parsed_dates:
+        seconds = (range_end - parsed_dates["since"]).total_seconds()
+        if seconds < 0:
+            raise ValueError("invalid_date_range")
+        if seconds > MAX_QUERY_RANGE_SECONDS:
+            raise ValueError("date_range_too_large")
+    for query_name, storage_name in FILTER_KEYS.items():
+        value = query.get(query_name, [None])[0]
+        if value is None or value == "":
+            continue
+        if len(value) > 256 or any(ord(character) < 32 for character in value):
+            raise ValueError(f"invalid_{query_name}")
+        if query_name == "outcome" and value not in {"completed", "failed", "cancelled"}:
+            raise ValueError("invalid_outcome")
+        filters[storage_name] = value
+    return filters
+
+
+def _path_identifier(path: str, prefix: str, suffix: str = "") -> str | None:
+    if not path.startswith(prefix) or (suffix and not path.endswith(suffix)):
+        return None
+    end = -len(suffix) if suffix else None
+    value = unquote(path[len(prefix) : end])
+    if not value or "/" in value or len(value) > 256 or any(ord(character) < 32 for character in value):
+        return None
+    return value
+
+
 def make_handler(state: AppState) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -125,6 +198,14 @@ def make_handler(state: AppState) -> type[BaseHTTPRequestHandler]:
             body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
             self.send_response(status)
             self._headers("application/json; charset=utf-8", len(body))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _send_bytes(self, status: int, content_type: str, body: bytes, **headers: str) -> None:
+            self.send_response(status)
+            self._headers(content_type, len(body))
+            for name, value in headers.items():
+                self.send_header(name.replace("_", "-"), value)
             self.end_headers()
             self.wfile.write(body)
 
@@ -174,6 +255,11 @@ def make_handler(state: AppState) -> type[BaseHTTPRequestHandler]:
         def do_GET(self) -> None:  # noqa: N802 - stdlib handler API
             parsed = urlparse(self.path)
             query = parse_qs(parsed.query)
+            try:
+                filters = _query_filters(query)
+            except ValueError as error:
+                self._send_error_json(HTTPStatus.BAD_REQUEST, str(error))
+                return
             if parsed.path in {"/", "/index.html"}:
                 self._serve_asset("index.html")
             elif parsed.path == "/app.js":
@@ -187,9 +273,55 @@ def make_handler(state: AppState) -> type[BaseHTTPRequestHandler]:
                     LOGGER.exception("health check failed")
                     self._send_json(HTTPStatus.SERVICE_UNAVAILABLE, {"status": "unhealthy", "schema_version": 1})
             elif parsed.path == "/api/v1/agents":
-                self._send_json(HTTPStatus.OK, {"agents": state.store.list_agents(limit=_bounded_limit(query))})
+                self._send_json(
+                    HTTPStatus.OK,
+                    {"agents": state.store.list_agents(limit=_bounded_limit(query), **filters)},
+                )
             elif parsed.path == "/api/v1/turns":
-                self._send_json(HTTPStatus.OK, {"turns": state.store.list_turns(limit=_bounded_limit(query))})
+                limit = _bounded_limit(query)
+                offset = _bounded_offset(query)
+                turns = state.store.list_turns(limit=limit, offset=offset, **filters)
+                self._send_json(
+                    HTTPStatus.OK,
+                    {"turns": turns, "limit": limit, "offset": offset, "next_offset": offset + len(turns) if len(turns) == limit else None},
+                )
+            elif parsed.path == "/api/v1/summary":
+                self._send_json(HTTPStatus.OK, state.store.summary(**filters))
+            elif (agent_id := _path_identifier(parsed.path, "/api/v1/agents/", "/summary")) is not None:
+                summary = state.store.agent_summary(agent_id, **{key: value for key, value in filters.items() if key != "agent_id"})
+                if summary is None:
+                    self._send_error_json(HTTPStatus.NOT_FOUND, "agent_not_found")
+                else:
+                    self._send_json(HTTPStatus.OK, summary)
+            elif (turn_id := _path_identifier(parsed.path, "/api/v1/turns/")) is not None:
+                detail = state.store.turn_detail(turn_id)
+                if detail is None:
+                    self._send_error_json(HTTPStatus.NOT_FOUND, "turn_not_found")
+                else:
+                    self._send_json(HTTPStatus.OK, detail)
+            elif parsed.path == "/api/v1/export.csv":
+                turns = state.store.list_turns(limit=MAX_QUERY_ROWS, **filters)
+                output = io.StringIO(newline="")
+                fieldnames = [
+                    "id", "agent_id", "agent_display_name", "harness", "model", "endpoint_id",
+                    "started_at", "ended_at", "outcome", "ttfa_ms", "ttfvt_ms", "first_tool_ms",
+                    "duration_ms", "max_stall_ms", "tool_count", "measurement_quality",
+                    "error_category", "error_code",
+                ]
+                writer = csv.DictWriter(output, fieldnames=fieldnames, extrasaction="ignore")
+                writer.writeheader()
+                for turn in turns:
+                    safe_turn = {
+                        key: f"'{value}" if isinstance(value, str) and value.startswith(("=", "+", "-", "@")) else value
+                        for key, value in turn.items()
+                    }
+                    writer.writerow(safe_turn)
+                self._send_bytes(
+                    HTTPStatus.OK,
+                    "text/csv; charset=utf-8",
+                    output.getvalue().encode("utf-8"),
+                    Content_Disposition='attachment; filename="buzz-agent-turns.csv"',
+                )
             elif parsed.path == "/api/v1/live":
                 self._serve_sse()
             else:

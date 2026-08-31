@@ -76,6 +76,65 @@ class TelemetryStoreTests(unittest.TestCase):
         self.assertEqual(agent["current_state"], "completed")
         self.assertIsNone(agent["current_turn_id"])
 
+    def test_filtered_aggregates_and_turn_waterfall(self) -> None:
+        events = [
+            validate_event(event("turn.started", observed_at="2026-08-31T12:00:00Z")),
+            validate_event(
+                event(
+                    "turn.first_activity",
+                    observed_at="2026-08-31T12:00:00.100Z",
+                    attributes={"elapsed_ms": 100, "update_kind": "agent_message_chunk", "measurement_quality": "exact"},
+                )
+            ),
+            validate_event(
+                event(
+                    "turn.first_visible_text",
+                    observed_at="2026-08-31T12:00:00.180Z",
+                    attributes={"elapsed_ms": 180, "measurement_quality": "exact"},
+                )
+            ),
+            validate_event(
+                event(
+                    "turn.first_tool",
+                    observed_at="2026-08-31T12:00:00.250Z",
+                    attributes={"elapsed_ms": 250, "tool_kind": "shell", "measurement_quality": "exact"},
+                )
+            ),
+            validate_event(
+                event(
+                    "turn.completed",
+                    observed_at="2026-08-31T12:00:01Z",
+                    attributes={
+                        "duration_ms": 1000,
+                        "ttfa_ms": 100,
+                        "ttfvt_ms": 180,
+                        "first_tool_ms": 250,
+                        "max_stall_ms": 70,
+                        "tool_count": 1,
+                        "measurement_quality": "exact",
+                        "outcome": "completed",
+                    },
+                )
+            ),
+        ]
+        self.store.insert_events(events)
+
+        summary = self.store.summary(harness="deepseek")
+        self.assertEqual(summary["fleet"]["turn_count"], 1)
+        self.assertEqual(summary["fleet"]["metrics"]["duration_ms"]["p95"], 1000)
+        self.assertEqual(summary["fleet"]["success_rate"], 1)
+        self.assertEqual(summary["dimensions"]["models"], ["example-model"])
+
+        agent = self.store.agent_summary("agent-alpha")
+        self.assertIsNotNone(agent)
+        assert agent is not None
+        self.assertEqual(agent["aggregate"]["metrics"]["first_tool_ms"]["p50"], 250)
+        detail = self.store.turn_detail("turn-alpha")
+        self.assertIsNotNone(detail)
+        assert detail is not None
+        self.assertEqual(len(detail["timeline"]), 5)
+        self.assertEqual(detail["timeline"][0]["event_type"], "turn.started")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -7,6 +7,7 @@ import sqlite3
 import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from statistics import mean, median
 from typing import Any, Iterable
 
 
@@ -62,6 +63,7 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS events_observed_at_idx ON events(observed_at);
 CREATE INDEX IF NOT EXISTS events_agent_observed_idx ON events(agent_id, observed_at DESC);
 CREATE INDEX IF NOT EXISTS events_turn_observed_idx ON events(turn_id, observed_at);
+CREATE INDEX IF NOT EXISTS events_dimensions_idx ON events(harness, model, endpoint_id, observed_at DESC);
 
 CREATE TABLE IF NOT EXISTS agents (
     id TEXT PRIMARY KEY,
@@ -84,9 +86,16 @@ CREATE TABLE IF NOT EXISTS turns (
     outcome TEXT,
     ttfa_ms REAL,
     ttfvt_ms REAL,
+    first_tool_ms REAL,
     duration_ms REAL,
     max_stall_ms REAL,
     tool_count INTEGER,
+    measurement_quality TEXT,
+    error_category TEXT,
+    error_code TEXT,
+    harness TEXT,
+    model TEXT,
+    endpoint_id TEXT,
     FOREIGN KEY(agent_id) REFERENCES agents(id)
 );
 
@@ -111,11 +120,33 @@ class TelemetryStore:
             self._connection.execute("PRAGMA journal_mode = WAL")
             self._connection.execute("PRAGMA synchronous = NORMAL")
             self._connection.executescript(MIGRATION)
+            self._migrate_turn_columns()
             self._connection.execute(
                 "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (1, ?)",
                 (_utc_now(),),
             )
+            self._connection.execute(
+                "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (2, ?)",
+                (_utc_now(),),
+            )
             self._connection.commit()
+
+    def _migrate_turn_columns(self) -> None:
+        existing = {
+            row["name"] for row in self._connection.execute("PRAGMA table_info(turns)").fetchall()
+        }
+        additions = {
+            "first_tool_ms": "REAL",
+            "measurement_quality": "TEXT",
+            "error_category": "TEXT",
+            "error_code": "TEXT",
+            "harness": "TEXT",
+            "model": "TEXT",
+            "endpoint_id": "TEXT",
+        }
+        for name, data_type in additions.items():
+            if name not in existing:
+                self._connection.execute(f"ALTER TABLE turns ADD COLUMN {name} {data_type}")
 
     @property
     def journal_mode(self) -> str:
@@ -178,21 +209,30 @@ class TelemetryStore:
             """
             INSERT INTO turns(
                 id, agent_id, session_id, started_at, ended_at, outcome, ttfa_ms,
-                ttfvt_ms, duration_ms, max_stall_ms, tool_count
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ttfvt_ms, first_tool_ms, duration_ms, max_stall_ms, tool_count,
+                measurement_quality, error_category, error_code, harness, model,
+                endpoint_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 started_at = MIN(turns.started_at, excluded.started_at),
                 ended_at = COALESCE(excluded.ended_at, turns.ended_at),
                 outcome = COALESCE(excluded.outcome, turns.outcome),
                 ttfa_ms = COALESCE(excluded.ttfa_ms, turns.ttfa_ms),
                 ttfvt_ms = COALESCE(excluded.ttfvt_ms, turns.ttfvt_ms),
+                first_tool_ms = COALESCE(excluded.first_tool_ms, turns.first_tool_ms),
                 duration_ms = COALESCE(excluded.duration_ms, turns.duration_ms),
                 max_stall_ms = CASE
                     WHEN excluded.max_stall_ms IS NULL THEN turns.max_stall_ms
                     WHEN turns.max_stall_ms IS NULL THEN excluded.max_stall_ms
                     ELSE MAX(turns.max_stall_ms, excluded.max_stall_ms)
                 END,
-                tool_count = COALESCE(excluded.tool_count, turns.tool_count)
+                tool_count = COALESCE(excluded.tool_count, turns.tool_count),
+                measurement_quality = COALESCE(excluded.measurement_quality, turns.measurement_quality),
+                error_category = COALESCE(excluded.error_category, turns.error_category),
+                error_code = COALESCE(excluded.error_code, turns.error_code),
+                harness = COALESCE(excluded.harness, turns.harness),
+                model = COALESCE(excluded.model, turns.model),
+                endpoint_id = COALESCE(excluded.endpoint_id, turns.endpoint_id)
             """,
             (
                 turn_id,
@@ -207,9 +247,18 @@ class TelemetryStore:
                 attributes.get("ttfvt_ms")
                 if "ttfvt_ms" in attributes
                 else attributes.get("elapsed_ms") if event_type == "turn.first_visible_text" else None,
+                attributes.get("first_tool_ms")
+                if "first_tool_ms" in attributes
+                else attributes.get("elapsed_ms") if event_type == "turn.first_tool" else None,
                 attributes.get("duration_ms"),
                 attributes.get("max_stall_ms", attributes.get("gap_ms") if event_type == "turn.stall" else None),
                 attributes.get("tool_count"),
+                attributes.get("measurement_quality"),
+                attributes.get("error_category"),
+                attributes.get("error_code"),
+                event["harness"],
+                event["model"],
+                event["endpoint_id"],
             ),
         )
 
@@ -249,31 +298,270 @@ class TelemetryStore:
                     self._upsert_turn(event)
         return inserted
 
-    def list_agents(self, *, limit: int = 100) -> list[dict[str, Any]]:
+    @staticmethod
+    def _filters(
+        *,
+        since: str | None = None,
+        until: str | None = None,
+        agent_id: str | None = None,
+        harness: str | None = None,
+        model: str | None = None,
+        endpoint_id: str | None = None,
+        outcome: str | None = None,
+        alias: str = "t",
+    ) -> tuple[str, list[Any]]:
+        clauses: list[str] = []
+        values: list[Any] = []
+        for column, value in (
+            ("agent_id", agent_id),
+            ("harness", harness),
+            ("model", model),
+            ("endpoint_id", endpoint_id),
+            ("outcome", outcome),
+        ):
+            if value is not None:
+                clauses.append(f"{alias}.{column} = ?")
+                values.append(value)
+        if since is not None:
+            clauses.append(f"{alias}.started_at >= ?")
+            values.append(since)
+        if until is not None:
+            clauses.append(f"{alias}.started_at <= ?")
+            values.append(until)
+        return (" WHERE " + " AND ".join(clauses) if clauses else "", values)
+
+    def list_agents(
+        self,
+        *,
+        limit: int = 100,
+        since: str | None = None,
+        until: str | None = None,
+        agent_id: str | None = None,
+        harness: str | None = None,
+        model: str | None = None,
+        endpoint_id: str | None = None,
+        outcome: str | None = None,
+    ) -> list[dict[str, Any]]:
+        clauses: list[str] = []
+        values: list[Any] = []
+        for column, value in (
+            ("id", agent_id),
+            ("harness", harness),
+            ("model", model),
+            ("endpoint_id", endpoint_id),
+        ):
+            if value is not None:
+                clauses.append(f"a.{column} = ?")
+                values.append(value)
+        if since is not None:
+            clauses.append("a.last_seen_at >= ?")
+            values.append(since)
+        if until is not None:
+            clauses.append("a.first_seen_at <= ?")
+            values.append(until)
+        if outcome is not None:
+            clauses.append("EXISTS (SELECT 1 FROM turns outcome_turn WHERE outcome_turn.agent_id = a.id AND outcome_turn.outcome = ?)")
+            values.append(outcome)
+        where = " WHERE " + " AND ".join(clauses) if clauses else ""
         with self._lock:
             rows = self._connection.execute(
-                """
+                f"""
                 SELECT id, display_name, first_seen_at, last_seen_at, harness, model,
-                       endpoint_id, current_state, current_turn_id
-                FROM agents ORDER BY last_seen_at DESC LIMIT ?
+                       endpoint_id, current_state, current_turn_id,
+                       (SELECT started_at FROM turns current_turn
+                        WHERE current_turn.id = a.current_turn_id) AS current_turn_started_at
+                FROM agents a {where} ORDER BY last_seen_at DESC LIMIT ?
                 """,
-                (limit,),
+                (*values, limit),
             ).fetchall()
         return [dict(row) for row in rows]
 
-    def list_turns(self, *, limit: int = 100) -> list[dict[str, Any]]:
+    def list_turns(
+        self,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+        since: str | None = None,
+        until: str | None = None,
+        agent_id: str | None = None,
+        harness: str | None = None,
+        model: str | None = None,
+        endpoint_id: str | None = None,
+        outcome: str | None = None,
+    ) -> list[dict[str, Any]]:
+        where, values = self._filters(
+            since=since,
+            until=until,
+            agent_id=agent_id,
+            harness=harness,
+            model=model,
+            endpoint_id=endpoint_id,
+            outcome=outcome,
+        )
         with self._lock:
             rows = self._connection.execute(
-                """
+                f"""
                 SELECT t.id, t.agent_id, a.display_name AS agent_display_name, t.session_id,
                        t.started_at, t.ended_at, t.outcome, t.ttfa_ms, t.ttfvt_ms,
-                       t.duration_ms, t.max_stall_ms, t.tool_count
+                       t.first_tool_ms, t.duration_ms, t.max_stall_ms, t.tool_count,
+                       t.measurement_quality, t.error_category, t.error_code,
+                       t.harness, t.model, t.endpoint_id
                 FROM turns t JOIN agents a ON a.id = t.agent_id
-                ORDER BY t.started_at DESC LIMIT ?
+                {where} ORDER BY t.started_at DESC LIMIT ? OFFSET ?
                 """,
-                (limit,),
+                (*values, limit, max(0, offset)),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    @staticmethod
+    def _percentile(values: list[float], percentile: float) -> float | None:
+        if not values:
+            return None
+        ordered = sorted(values)
+        position = (len(ordered) - 1) * percentile
+        lower = int(position)
+        upper = min(lower + 1, len(ordered) - 1)
+        weight = position - lower
+        return ordered[lower] * (1 - weight) + ordered[upper] * weight
+
+    @classmethod
+    def _metric(cls, rows: list[dict[str, Any]], name: str) -> dict[str, Any]:
+        values = [float(row[name]) for row in rows if row.get(name) is not None]
+        qualities: dict[str, int] = {}
+        for row in rows:
+            if row.get(name) is None:
+                continue
+            quality = row.get("measurement_quality") or "unavailable"
+            qualities[quality] = qualities.get(quality, 0) + 1
+        return {
+            "count": len(values),
+            "mean": mean(values) if values else None,
+            "median": median(values) if values else None,
+            "p50": cls._percentile(values, 0.50),
+            "p95": cls._percentile(values, 0.95),
+            "minimum": min(values) if values else None,
+            "maximum": max(values) if values else None,
+            "quality_counts": qualities,
+        }
+
+    @classmethod
+    def _aggregate(cls, rows: list[dict[str, Any]]) -> dict[str, Any]:
+        outcomes: dict[str, int] = {"completed": 0, "failed": 0, "cancelled": 0, "active": 0}
+        for row in rows:
+            outcome = row.get("outcome") or "active"
+            outcomes[outcome] = outcomes.get(outcome, 0) + 1
+        terminal = sum(value for key, value in outcomes.items() if key != "active")
+        return {
+            "turn_count": len(rows),
+            "active_turns": outcomes.get("active", 0),
+            "outcomes": outcomes,
+            "success_rate": outcomes.get("completed", 0) / terminal if terminal else None,
+            "failure_rate": outcomes.get("failed", 0) / terminal if terminal else None,
+            "cancellation_rate": outcomes.get("cancelled", 0) / terminal if terminal else None,
+            "metrics": {
+                name: cls._metric(rows, name)
+                for name in ("ttfa_ms", "ttfvt_ms", "first_tool_ms", "duration_ms", "max_stall_ms")
+            },
+        }
+
+    def summary(self, **filters: Any) -> dict[str, Any]:
+        rows = self.list_turns(limit=500, **filters)
+        agents = self.list_agents(limit=500, **filters)
+
+        def groups(key: str) -> list[dict[str, Any]]:
+            grouped: dict[str, list[dict[str, Any]]] = {}
+            for row in rows:
+                label = row.get(key) or "unknown"
+                grouped.setdefault(label, []).append(row)
+            return [
+                {"value": label, **self._aggregate(group_rows)}
+                for label, group_rows in sorted(grouped.items())
+            ]
+
+        dimensions: dict[str, list[str]] = {}
+        with self._lock:
+            for response_key, column in (
+                ("agents", "agent_id"),
+                ("harnesses", "harness"),
+                ("models", "model"),
+                ("endpoints", "endpoint_id"),
+                ("outcomes", "outcome"),
+            ):
+                found = self._connection.execute(
+                    f"SELECT DISTINCT {column} FROM turns WHERE {column} IS NOT NULL ORDER BY {column} LIMIT 500"
+                ).fetchall()
+                dimensions[response_key] = [str(row[0]) for row in found]
+        return {
+            "fleet": {"active_agents": sum(agent["current_turn_id"] is not None for agent in agents), **self._aggregate(rows)},
+            "groups": {
+                "agents": groups("agent_id"),
+                "harnesses": groups("harness"),
+                "models": groups("model"),
+                "endpoints": groups("endpoint_id"),
+            },
+            "dimensions": dimensions,
+            "limited": len(rows) == 500,
+        }
+
+    def agent_summary(self, agent_id: str, **filters: Any) -> dict[str, Any] | None:
+        agents = self.list_agents(limit=1, agent_id=agent_id)
+        if not agents:
+            return None
+        rows = self.list_turns(limit=100, agent_id=agent_id, **filters)
+        return {"agent": agents[0], "aggregate": self._aggregate(rows), "turns": rows}
+
+    def turn_detail(self, turn_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._connection.execute(
+                """
+                SELECT t.*, a.display_name AS agent_display_name
+                FROM turns t JOIN agents a ON a.id = t.agent_id WHERE t.id = ?
+                """,
+                (turn_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            event_rows = self._connection.execute(
+                """
+                SELECT event_type, observed_at, safe_payload_json
+                FROM events WHERE turn_id = ? ORDER BY observed_at, rowid LIMIT 500
+                """,
+                (turn_id,),
+            ).fetchall()
+            terminal = row["ended_at"] or _utc_now()
+            shared_rows = self._connection.execute(
+                """
+                SELECT event_type, observed_at, safe_payload_json
+                FROM events
+                WHERE event_type IN ('server.sample', 'hardware.sample')
+                  AND observed_at >= ? AND observed_at <= ?
+                ORDER BY observed_at, rowid LIMIT 200
+                """,
+                (row["started_at"], terminal),
+            ).fetchall()
+
+        def timeline(items: Iterable[sqlite3.Row], *, shared: bool) -> list[dict[str, Any]]:
+            result = []
+            for item in items:
+                event = json.loads(item["safe_payload_json"])
+                result.append(
+                    {
+                        "event_type": item["event_type"],
+                        "observed_at": item["observed_at"],
+                        "monotonic_offset_ms": event["monotonic_offset_ms"],
+                        "span_id": event["span_id"],
+                        "parent_span_id": event["parent_span_id"],
+                        "attributes": event["attributes"],
+                        "scope": "shared_context" if shared else "turn",
+                    }
+                )
+            return result
+
+        return {
+            "turn": dict(row),
+            "timeline": timeline(event_rows, shared=False),
+            "shared_context": timeline(shared_rows, shared=True),
+        }
 
     def purge_expired_raw(self, *, retention_days: int = 7, now: datetime | None = None) -> int:
         current = now or datetime.now(timezone.utc)
