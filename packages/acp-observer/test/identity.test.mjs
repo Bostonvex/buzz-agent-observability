@@ -54,3 +54,17 @@ test("unknown identities remain stable per hashed session", () => {
   assert.notEqual(first.agent.id, second.agent.id);
   assert.notEqual(first.sessionId, second.sessionId);
 });
+
+test("explicit display name groups process and session identity when no separate id exists", () => {
+  const processIdentity = resolveIdentity({
+    salt: "stable-test-salt-1234567890",
+    sessionId: "process-instance",
+    explicitDisplayName: "Implementor 02",
+  });
+  const sessionIdentity = resolveIdentity({
+    salt: "stable-test-salt-1234567890",
+    sessionId: "session-instance",
+    explicitDisplayName: "Implementor 02",
+  });
+  assert.equal(processIdentity.agent.id, sessionIdentity.agent.id);
+});

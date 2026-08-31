@@ -77,6 +77,7 @@ export function resolveIdentity({
 
   const identityMaterial =
     safeLabel(explicitId, null) ??
+    safeLabel(explicitDisplayName, null) ??
     safeLabel(metadata.BUZZ_TELEMETRY_AGENT_ID, null) ??
     safeLabel(metadata.BUZZ_ACP_DISPLAY_NAME, null) ??
     safeLabel(metadata.BUZZ_GIT_ORIGIN_AGENT_NAME, null) ??

@@ -97,6 +97,8 @@ class AcpObserver {
     this.turns = new Map();
     this.observerErrors = 0;
     this.processExited = false;
+    this.processStartedAt = this.clock();
+    this.processStartedEmitted = false;
 
     const processIdentity = resolveIdentity({
       salt: this.salt,
@@ -126,18 +128,8 @@ class AcpObserver {
           ),
       });
 
-    this.#emit(
-      "process.started",
-      {
-        agent: this.processAgent,
-        sessionId: null,
-        turnId: null,
-        spanId: null,
-        parentSpanId: null,
-      },
-      { harness_version: safeIdentifier(config.harnessVersion, "unknown") },
-      this.clock(),
-    );
+    this.harnessVersion = safeIdentifier(config.harnessVersion, "unknown");
+    if (this.explicitAgentId || this.explicitDisplayName) this.#ensureProcessStarted();
   }
 
   #makeEvent(eventType, context, attributes, now) {
@@ -166,6 +158,24 @@ class AcpObserver {
     } catch {
       this.observerErrors += 1;
     }
+  }
+
+  #ensureProcessStarted(agent = null) {
+    if (this.processStartedEmitted) return;
+    if (agent) this.processAgent = agent;
+    this.processStartedEmitted = true;
+    this.#emit(
+      "process.started",
+      {
+        agent: this.processAgent,
+        sessionId: null,
+        turnId: null,
+        spanId: null,
+        parentSpanId: null,
+      },
+      { harness_version: this.harnessVersion },
+      this.processStartedAt,
+    );
   }
 
   #safe(action) {
@@ -218,6 +228,7 @@ class AcpObserver {
       currentTurnKey: null,
     };
     this.sessions.set(rawSessionId, session);
+    this.#ensureProcessStarted(session.agent);
     this.#emit("session.started", this.#context(session), {}, now);
     return session;
   }
@@ -511,6 +522,7 @@ class AcpObserver {
   observeProcessExit(details = {}, monotonicNow = this.clock()) {
     if (!this.enabled || this.processExited) return;
     try {
+      this.#ensureProcessStarted();
       for (const turn of [...this.turns.values()]) {
         this.#finishTurn(turn, "failed", monotonicNow, "process_exit");
       }
@@ -552,6 +564,7 @@ class AcpObserver {
 
   observeProtocolAnomaly(details = {}, monotonicNow = this.clock()) {
     this.#safe(() => {
+      this.#ensureProcessStarted();
       const lineBytes = finiteNonNegative(details.lineBytes);
       this.#emit(
         "protocol.anomaly",

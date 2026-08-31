@@ -189,6 +189,17 @@ test("replayed and background updates without an active prompt are ignored", () 
   assert.deepEqual(transport.events.map((event) => event.event_type), ["process.started", "session.started"]);
 });
 
+test("process event adopts the first safe session identity", () => {
+  const { clock, transport, observer } = setup();
+  establishSession(observer, clock, [
+    { name: "BUZZ_ACP_DISPLAY_NAME", value: "Resolved agent" },
+  ]);
+  const processEvent = transport.events.find((event) => event.event_type === "process.started");
+  const sessionEvent = transport.events.find((event) => event.event_type === "session.started");
+  assert.equal(processEvent.agent.display_name, "Resolved agent");
+  assert.equal(processEvent.agent.id, sessionEvent.agent.id);
+});
+
 test("observer state is bounded and malformed inputs never throw", () => {
   const { clock, observer } = setup({ maxSessions: 2, maxPendingRequests: 2, maxToolsPerTurn: 2 });
   assert.doesNotThrow(() => observer.observeClientMessage(null));
