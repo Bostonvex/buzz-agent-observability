@@ -86,9 +86,20 @@ EVENT_ATTRIBUTES = {
         }
     ),
     "turn.failed": frozenset(
-        {"duration_ms", "ttfa_ms", "ttfvt_ms", "max_stall_ms", "tool_count", "error_category", "error_code"}
+        {
+            "duration_ms",
+            "ttfa_ms",
+            "ttfvt_ms",
+            "first_tool_ms",
+            "max_stall_ms",
+            "tool_count",
+            "error_category",
+            "error_code",
+        }
     ),
-    "turn.cancelled": frozenset({"duration_ms", "ttfa_ms", "ttfvt_ms", "max_stall_ms", "tool_count"}),
+    "turn.cancelled": frozenset(
+        {"duration_ms", "ttfa_ms", "ttfvt_ms", "first_tool_ms", "max_stall_ms", "tool_count"}
+    ),
     "tool.started": frozenset({"tool_kind", "status"}),
     "tool.updated": frozenset({"tool_kind", "status", "elapsed_ms"}),
     "tool.completed": frozenset({"tool_kind", "status", "duration_ms"}),

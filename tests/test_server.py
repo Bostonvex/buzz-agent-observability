@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import tempfile
 import threading
 import unittest
@@ -8,6 +10,7 @@ from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
+from collector.auth import load_or_create_identity_salt, load_or_create_token
 from collector.server import MAX_BODY_BYTES, AppState, create_server
 from collector.storage import TelemetryStore
 from tests.helpers import event
@@ -124,6 +127,37 @@ class CollectorServerTests(unittest.TestCase):
     def test_non_loopback_bind_is_refused(self) -> None:
         with self.assertRaisesRegex(ValueError, "loopback"):
             create_server(host="0.0.0.0", port=0, state=self.state)
+
+    def test_node_observer_delivers_schema_valid_events_over_http(self) -> None:
+        token_path = Path(self.temporary.name) / "observer-token"
+        salt_path = Path(self.temporary.name) / "observer-salt"
+        token_path.write_text(self.token + "\n", encoding="ascii")
+        os.chmod(token_path, 0o600)
+        load_or_create_token(token_path)
+        load_or_create_identity_salt(salt_path)
+        environment = {
+            **os.environ,
+            "BUZZ_TELEMETRY_ENABLED": "1",
+            "BUZZ_TELEMETRY_URL": self.url + "/api/v1/events",
+            "BUZZ_TELEMETRY_TOKEN_FILE": str(token_path),
+            "BUZZ_TELEMETRY_IDENTITY_SALT_FILE": str(salt_path),
+            "BUZZ_TELEMETRY_ENDPOINT_ID": "local-example",
+            "BUZZ_TELEMETRY_AGENT_ID": "http-fixture-agent",
+            "BUZZ_ACP_DISPLAY_NAME": "HTTP fixture agent",
+        }
+        completed = subprocess.run(
+            ["node", "packages/acp-observer/test/http-fixture.mjs"],
+            cwd=Path(__file__).resolve().parent.parent,
+            env=environment,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        diagnostics = json.loads(completed.stdout)
+        self.assertEqual(diagnostics["transport"]["failedBatches"], 0)
+        self.assertEqual(diagnostics["transport"]["droppedEvents"], 0)
+        self.assertGreaterEqual(self.store.health()["events"], 6)
+        self.assertEqual(self.store.list_agents()[0]["display_name"], "HTTP fixture agent")
 
 
 if __name__ == "__main__":

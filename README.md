@@ -30,7 +30,7 @@ Open <http://127.0.0.1:7900/>. In a second terminal, load two safe synthetic tur
 python3 -m collector demo
 ```
 
-The first server start creates an ingest token at `~/.config/buzz-agent-observability/ingest-token` with mode `0600` and a database at `~/.local/share/buzz-agent-observability/telemetry.sqlite3`. Override these with `--token-file` and `--database`, or the corresponding `BUZZ_OBSERVABILITY_TOKEN_FILE` and `BUZZ_OBSERVABILITY_DATABASE` environment variables.
+The first server start creates an ingest token and a separate HMAC identity salt under `~/.config/buzz-agent-observability/`, both with mode `0600`, and a database at `~/.local/share/buzz-agent-observability/telemetry.sqlite3`. Override these with `--token-file`, `--identity-salt-file`, and `--database`, or the corresponding environment variables.
 
 ## API foundation
 
@@ -48,9 +48,25 @@ Request bodies are capped at 256 KiB. The server refuses a non-loopback bind in 
 
 The schema rejects unknown fields and attributes. It has no fields for prompts, completions, reasoning text, tool arguments or results, filesystem paths, environment dumps, headers, cookies, authentication tokens, or private keys. Sensitive-looking values are rejected before SQLite insertion. See [Privacy](docs/privacy.md) and the [event contract](docs/event-schema.md).
 
+## ACP observer
+
+Phase 2 adds the dependency-free `@buzz-agent-observability/acp-observer` ESM package. It accepts parsed client/server ACP messages, maintains bounded state, derives turn/text/tool/usage timing, hashes identity and session values, and delivers events asynchronously with strict deadlines. It is disabled by default and fail-open.
+
+Harness configuration needs these shared values:
+
+```text
+BUZZ_TELEMETRY_ENABLED=1
+BUZZ_TELEMETRY_URL=http://127.0.0.1:7900/api/v1/events
+BUZZ_TELEMETRY_TOKEN_FILE=/path/to/ingest-token
+BUZZ_TELEMETRY_IDENTITY_SALT_FILE=/path/to/identity-salt
+BUZZ_TELEMETRY_ENDPOINT_ID=local-model-primary
+```
+
+See the [observer package README](packages/acp-observer/README.md) for its API. No content-capture option exists.
+
 ## Project direction
 
-The next phase introduces a small dependency-free Node.js ACP observer with bounded asynchronous delivery and no-throw behavior. DeepSeek is the first harness integration after that. See the [roadmap](docs/roadmap.md) and [proposed Phase 2 interface](docs/phase-2-interface.md).
+DeepSeek is the first harness integration after the shared observer. See the [roadmap](docs/roadmap.md) and [Phase 2 interface](docs/phase-2-interface.md).
 
 ## Upstream research
 

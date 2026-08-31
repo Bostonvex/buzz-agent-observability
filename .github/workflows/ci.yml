@@ -19,5 +19,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
       - run: ./scripts/doctor.sh
       - run: ./scripts/test.sh

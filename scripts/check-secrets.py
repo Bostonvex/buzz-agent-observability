@@ -10,7 +10,22 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 SKIP_DIRECTORIES = {".git", ".venv", "__pycache__", "dist", "build"}
 SKIP_FILES = {Path(__file__).resolve()}
-TEXT_SUFFIXES = {"", ".css", ".html", ".js", ".json", ".md", ".py", ".sh", ".toml", ".txt", ".yml", ".yaml"}
+TEXT_SUFFIXES = {
+    "",
+    ".css",
+    ".html",
+    ".js",
+    ".json",
+    ".md",
+    ".mjs",
+    ".py",
+    ".sh",
+    ".toml",
+    ".ts",
+    ".txt",
+    ".yml",
+    ".yaml",
+}
 
 # Concatenated markers keep this detector from matching its own source.
 PATTERNS = {

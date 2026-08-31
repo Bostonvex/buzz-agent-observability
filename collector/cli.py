@@ -15,13 +15,14 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from collector.auth import load_or_create_token
+from collector.auth import load_or_create_identity_salt, load_or_create_token
 from collector.schema import validate_event
 from collector.server import AppState, create_server
 from collector.storage import TelemetryStore
 
 DEFAULT_DATABASE = "~/.local/share/buzz-agent-observability/telemetry.sqlite3"
 DEFAULT_TOKEN_FILE = "~/.config/buzz-agent-observability/ingest-token"
+DEFAULT_IDENTITY_SALT_FILE = "~/.config/buzz-agent-observability/identity-salt"
 
 
 def _now() -> str:
@@ -60,6 +61,7 @@ def command_serve(args: argparse.Namespace) -> int:
     if args.raw_event_days < 1 or args.raw_event_days > 3650:
         raise SystemExit("--raw-event-days must be between 1 and 3650")
     token = load_or_create_token(args.token_file)
+    load_or_create_identity_salt(args.identity_salt_file)
     store = TelemetryStore(args.database)
     package_dashboard = Path(__file__).resolve().parent / "dashboard"
     source_dashboard = Path(__file__).resolve().parent.parent / "dashboard"
@@ -80,8 +82,9 @@ def command_serve(args: argparse.Namespace) -> int:
     return 0
 
 
-def _run_doctor(database: Path, token_file: Path) -> dict[str, Any]:
+def _run_doctor(database: Path, token_file: Path, identity_salt_file: Path) -> dict[str, Any]:
     token = load_or_create_token(token_file)
+    identity_salt = load_or_create_identity_salt(identity_salt_file)
     store = TelemetryStore(database)
     try:
         sample = _event(
@@ -101,20 +104,28 @@ def _run_doctor(database: Path, token_file: Path) -> dict[str, Any]:
             "journal_mode": health["journal_mode"],
             "token_file_mode": oct(mode),
             "token_length": len(token),
+            "identity_salt_file_mode": oct(stat.S_IMODE(identity_salt_file.stat().st_mode)),
+            "identity_salt_length": len(identity_salt),
         }
     finally:
         store.close()
 
 
 def command_doctor(args: argparse.Namespace) -> int:
-    if args.database and args.token_file:
-        result = _run_doctor(Path(args.database).expanduser(), Path(args.token_file).expanduser())
-    elif args.database or args.token_file:
-        raise SystemExit("doctor requires both --database and --token-file when either is supplied")
+    if args.database and args.token_file and args.identity_salt_file:
+        result = _run_doctor(
+            Path(args.database).expanduser(),
+            Path(args.token_file).expanduser(),
+            Path(args.identity_salt_file).expanduser(),
+        )
+    elif args.database or args.token_file or args.identity_salt_file:
+        raise SystemExit(
+            "doctor requires --database, --token-file, and --identity-salt-file when any is supplied"
+        )
     else:
         with tempfile.TemporaryDirectory(prefix="buzz-observability-doctor-") as directory:
             root = Path(directory)
-            result = _run_doctor(root / "telemetry.sqlite3", root / "ingest-token")
+            result = _run_doctor(root / "telemetry.sqlite3", root / "ingest-token", root / "identity-salt")
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0
 
@@ -189,12 +200,17 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--port", type=int, default=int(os.environ.get("BUZZ_OBSERVABILITY_PORT", "7900")))
     serve.add_argument("--database", default=os.environ.get("BUZZ_OBSERVABILITY_DATABASE", DEFAULT_DATABASE))
     serve.add_argument("--token-file", default=os.environ.get("BUZZ_OBSERVABILITY_TOKEN_FILE", DEFAULT_TOKEN_FILE))
+    serve.add_argument(
+        "--identity-salt-file",
+        default=os.environ.get("BUZZ_OBSERVABILITY_IDENTITY_SALT_FILE", DEFAULT_IDENTITY_SALT_FILE),
+    )
     serve.add_argument("--raw-event-days", type=int, default=7)
     serve.set_defaults(handler=command_serve)
 
     doctor = subcommands.add_parser("doctor", help="validate loopback, token, schema, and SQLite behavior")
     doctor.add_argument("--database")
     doctor.add_argument("--token-file")
+    doctor.add_argument("--identity-salt-file")
     doctor.set_defaults(handler=command_doctor)
 
     demo = subcommands.add_parser("demo", help="ingest metadata-only synthetic agent turns")
