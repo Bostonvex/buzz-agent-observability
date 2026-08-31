@@ -24,6 +24,9 @@ It also works with compatible local servers that preserve those fields.
 - Collector delivery uses a bounded background queue. A missing collector,
   timeout, invalid private file, or rejected event never changes the model
   response.
+- The DeepSeek and Qwen launchers start the proxy with a minimal environment
+  allowlist. Model/API credentials stay only in the model client; collector
+  token paths and proxy controls are removed from the model child environment.
 - The authenticated context endpoint accepts only normalized identifiers and
   safe labels already produced by the ACP observer. It uses the private
   collector token and never accepts prompt or response fields.
@@ -60,6 +63,29 @@ one turn is active, correlation is `exact`. With simultaneous turns it is
 With no active context, correlation is `unavailable` or `ambiguous` according
 to whether a static agent identity was configured.
 
+### Supervised harness sidecar
+
+The DeepSeek and Qwen harness integrations can supervise one ephemeral proxy
+per harness process. Add these variables alongside the normal telemetry
+configuration:
+
+```text
+BUZZ_MODEL_PROXY_ENABLED=1
+BUZZ_MODEL_PROXY_BIN=/absolute/path/to/buzz-model-proxy
+```
+
+`BUZZ_MODEL_PROXY_BIN` must be absolute. The launcher starts the proxy on an
+ephemeral loopback port, redirects only that process's model base URL, and
+wires the observer to its authenticated context endpoint. The original model
+upstream remains fixed for the proxy lifetime. If configuration is missing or
+startup fails, the launcher reports a metadata-only diagnostic and uses the
+original upstream. If an active proxy exits unexpectedly, the harness process
+exits so Buzz can restart the complete process tree instead of silently losing
+model measurements.
+
+`BUZZ_MODEL_PROXY_STARTUP_TIMEOUT_MS` optionally changes the 3000 ms startup
+deadline and is bounded to 100–30000 ms. It normally should not be set.
+
 ## Metrics and semantics
 
 For streaming responses, the proxy records:
@@ -88,7 +114,15 @@ connection and emit a metadata-only cancellation failure. Incoming requests
 must use `Content-Length`; chunked request uploads are rejected. The default
 request cap is 256 MiB.
 
-Rollback is immediate: restore the original model base URL and remove
+The supervised mode currently supports DeepSeek and Qwen when their configured
+upstream accepts OpenAI-compatible paths. Do not enable it for an Anthropic
+`/v1/messages` client; that path is intentionally outside the fixed allowlist.
+In particular, ZCode must remain direct while its selected provider uses the
+Anthropic API shape.
+
+Rollback is immediate. In supervised mode set
+`BUZZ_MODEL_PROXY_ENABLED=0` or remove both `BUZZ_MODEL_PROXY_*` variables and
+restart Buzz. In manual mode restore the original model base URL and remove
 `BUZZ_MODEL_PROXY_CONTEXT_URL`. No database migration or harness reinstall is
 required.
 
@@ -105,3 +139,8 @@ Responses events, cancellation, 429/error preservation, a multi-megabyte
 request, exact/ambiguous correlation, content exclusion, fixed paths, and
 loopback binding. A real-provider smoke test is intentionally operator-run so
 CI never requires or exposes an API key.
+
+On 2026-08-31, an operator-run streaming canary through the installed sidecar
+and configured DeepSeek-compatible endpoint returned HTTP 200 and recorded
+exact correlation, 9 input tokens, 3 output tokens, 253.5 ms decode time, and
+11.83 output tokens/second. No request or response content was retained.

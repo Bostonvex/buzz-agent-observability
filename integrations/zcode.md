@@ -10,6 +10,13 @@ Configuration uses the same shared variables documented in the
 Missing or unsafe private files, invalid configuration, observer exceptions,
 timeouts, and collector outages all fail open.
 
+The current model timing proxy is not enabled for ZCode. ZCode's selected live
+provider uses the Anthropic `/v1/messages` shape, while the proxy intentionally
+allows only OpenAI-compatible completion and Responses paths. ACP lifecycle
+telemetry continues normally. Add ZCode model timing only after the proxy has a
+reviewed, byte-parity Anthropic adapter and corresponding streaming-usage
+tests; do not redirect the current provider through the OpenAI path proxy.
+
 Before observation, the ZCode adapter reduces each message to the minimum
 shape needed by the shared observer. It removes prompt and completion text,
 reasoning, tool titles/arguments/results, paths, arbitrary metadata, response

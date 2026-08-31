@@ -15,9 +15,17 @@ Configuration uses the same shared variables documented in the
 ACP `session/new` metadata and is stored as a salted HMAC identifier with an
 approved display label.
 
+The optional supervised proxy uses the two `BUZZ_MODEL_PROXY_*` variables in
+the DeepSeek guide. The launcher redirects both `OPENAI_BASE_URL` and
+`QWEN_BASE_URL` only in the Qwen child and removes collector/proxy configuration
+from that child. API credentials remain in Qwen and are not copied into the
+proxy environment. Startup failures fall back to the configured direct
+endpoint.
+
 The Qwen acceptance suite covers recorded safe client/server fixtures, byte and
 line preservation, slow-consumer backpressure, malformed and oversized lines,
 observer exceptions, enabled/disabled parity, collector outage, exact child
 exit codes and signals, tool updates, and two concurrent agent processes. It
 also checks that prompt text, synthetic private values, and raw session IDs do
-not enter telemetry.
+not enter telemetry. Sidecar tests additionally cover loopback URL validation,
+environment isolation, and startup fail-open behavior.
