@@ -18,6 +18,7 @@ from proxy.openai_proxy import (
     ProxyState,
     RequestContext,
     ResponseInspector,
+    _upstream_path,
     _upstream_url,
     create_proxy_server,
 )
@@ -67,14 +68,26 @@ class MockOpenAIHandler(BaseHTTPRequestHandler):
         type(self).request_headers.append(dict(self.headers.items()))
         type(self).request_sizes.append(received)
         mode = self.headers.get("X-Test-Mode", "nonstream")
-        if mode in {"stream", "tool", "cancel"}:
+        if mode in {"stream", "tool", "cancel", "anthropic-stream", "anthropic-error"}:
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Cache-Control", "no-cache")
             self.send_header("Connection", "close")
             self.end_headers()
             self.close_connection = True
-            if mode == "tool":
+            if mode == "anthropic-stream":
+                chunks = [
+                    b'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":12,"output_tokens":1,"cache_read_input_tokens":4}}}\n\n',
+                    b'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n',
+                    b'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"anthropic-private-response"}}\n\n',
+                    b'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":6}}\n\n',
+                    b'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+                ]
+            elif mode == "anthropic-error":
+                chunks = [
+                    b'event: error\ndata: {"type":"error","error":{"type":"overloaded_error","message":"private"}}\n\n',
+                ]
+            elif mode == "tool":
                 chunks = [
                     b'data: {"choices":[{"delta":{"role":"assistant"}}]}\n\n',
                     b'data: {"choices":[{"delta":{"tool_calls":[{"index":0}]}}]}\n\n',
@@ -161,7 +174,9 @@ class ModelProxyTests(unittest.TestCase):
         self.registry = CorrelationRegistry(fallback)
         self.state = ProxyState(
             upstream=_upstream_url(f"http://127.0.0.1:{self.upstream.server_address[1]}"),
-            allowed_paths=frozenset({"/v1/chat/completions", "/v1/responses"}),
+            allowed_paths=frozenset(
+                {"/v1/chat/completions", "/v1/responses", "/v1/messages"}
+            ),
             registry=self.registry,
             sink=self.sink,
             context_token=self.token,
@@ -296,6 +311,29 @@ class ModelProxyTests(unittest.TestCase):
         self.assertIn(b"tool_calls", body)
         self.assertEqual(len(self.sink.by_type("model.first_token")), 1)
 
+    def test_anthropic_streaming_bytes_usage_and_ttft_are_preserved(self) -> None:
+        self.context()
+        status, body, _ = self.post(mode="anthropic-stream", path="/v1/messages")
+        self.assertEqual(status, 200)
+        self.assertIn(b"anthropic-private-response", body)
+        completed = self.sink.by_type("model.completed")[-1]
+        self.assertEqual(completed["attributes"]["input_tokens"], 12)
+        self.assertEqual(completed["attributes"]["output_tokens"], 6)
+        self.assertEqual(completed["attributes"]["cached_tokens"], 4)
+        self.assertGreater(completed["attributes"]["decode_ms"], 0)
+        self.assertEqual(len(self.sink.by_type("model.first_token")), 1)
+        self.assertNotIn("anthropic-private-response", json.dumps(self.sink.events))
+
+    def test_anthropic_stream_error_is_a_safe_model_failure(self) -> None:
+        self.context()
+        status, body, _ = self.post(mode="anthropic-error", path="/v1/messages")
+        self.assertEqual(status, 200)
+        self.assertIn(b"overloaded_error", body)
+        failed = self.sink.by_type("model.failed")[-1]
+        self.assertEqual(failed["attributes"]["error_category"], "upstream_stream")
+        self.assertEqual(failed["attributes"]["error_code"], "overloaded_error")
+        self.assertNotIn("private", json.dumps(failed))
+
     def test_upstream_error_status_and_body_are_preserved_without_content_capture(self) -> None:
         self.context()
         status, body, _ = self.post(mode="error")
@@ -398,6 +436,32 @@ class ModelProxyTests(unittest.TestCase):
 
 
 class ResponseInspectorTests(unittest.TestCase):
+    def test_anthropic_sse_extracts_generated_delta_and_cumulative_usage(self) -> None:
+        inspector = ResponseInspector("text/event-stream")
+        payload = (
+            b'event: message_start\ndata: {"type":"message_start","message":{"usage":'
+            b'{"input_tokens":21,"output_tokens":1,"cache_read_input_tokens":5}}}\n\n'
+            b'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,'
+            b'"delta":{"type":"input_json_delta","partial_json":"{\\"path\\":"}}\n\n'
+            b'event: message_delta\ndata: {"type":"message_delta","usage":{"output_tokens":8}}\n\n'
+        )
+        inspector.feed(payload[:73], 2.0)
+        inspector.feed(payload[73:181], 2.1)
+        inspector.feed(payload[181:], 2.2)
+        inspector.finish(2.3)
+        self.assertEqual(inspector.first_generated_at, 2.2)
+        self.assertEqual(
+            inspector.usage,
+            {"input_tokens": 21, "output_tokens": 8, "cached_tokens": 5},
+        )
+
+    def test_prefixed_anthropic_upstream_path_is_joined_once(self) -> None:
+        upstream = _upstream_url("https://example.test/api/anthropic")
+        self.assertEqual(
+            _upstream_path(upstream, "/v1/messages"),
+            "/api/anthropic/v1/messages",
+        )
+
     def test_responses_api_sse_extracts_delta_and_nested_usage_across_splits(self) -> None:
         inspector = ResponseInspector("text/event-stream")
         payload = (

@@ -508,6 +508,79 @@ class TelemetryStore:
             },
         }
 
+    @classmethod
+    def _model_metrics(cls, model_events: list[dict[str, Any]]) -> dict[str, Any]:
+        terminal_events = [
+            event
+            for event in model_events
+            if event["event_type"] in {"model.completed", "model.failed"}
+        ]
+        ttft_values = [
+            float(event["attributes"]["elapsed_ms"])
+            for event in model_events
+            if event["event_type"] == "model.first_token"
+            and isinstance(event["attributes"].get("elapsed_ms"), (int, float))
+        ]
+        exact_decode_events = [
+            event
+            for event in terminal_events
+            if event["event_type"] == "model.completed"
+            and event["attributes"].get("correlation") == "exact"
+            and isinstance(event["attributes"].get("decode_ms"), (int, float))
+            and event["attributes"].get("decode_ms", 0) > 0
+            and isinstance(event["attributes"].get("output_tokens"), int)
+        ]
+        decode_ms = sum(
+            float(event["attributes"]["decode_ms"]) for event in exact_decode_events
+        )
+        output_tokens = sum(
+            int(event["attributes"]["output_tokens"]) for event in exact_decode_events
+        )
+        correlations: dict[str, int] = {}
+        for event in terminal_events:
+            correlation = str(event["attributes"].get("correlation", "unavailable"))
+            correlations[correlation] = correlations.get(correlation, 0) + 1
+        return {
+            "call_count": sum(
+                event["event_type"] == "model.request_started" for event in model_events
+            ),
+            "completed_count": sum(
+                event["event_type"] == "model.completed" for event in model_events
+            ),
+            "failed_count": sum(
+                event["event_type"] == "model.failed" for event in model_events
+            ),
+            "exact_call_count": len(exact_decode_events),
+            "ttft_ms": {
+                "count": len(ttft_values),
+                "p50": cls._percentile(ttft_values, 0.50),
+                "p95": cls._percentile(ttft_values, 0.95),
+                "minimum": min(ttft_values) if ttft_values else None,
+                "maximum": max(ttft_values) if ttft_values else None,
+            },
+            "exact_output_tokens": output_tokens,
+            "exact_decode_ms": decode_ms or None,
+            "output_tokens_per_second": output_tokens / (decode_ms / 1000)
+            if decode_ms > 0
+            else None,
+            "correlation_counts": correlations,
+        }
+
+    def _model_events_for_turns(self, turn_ids: list[str]) -> list[dict[str, Any]]:
+        if not turn_ids:
+            return []
+        placeholders = ",".join("?" for _ in turn_ids)
+        with self._lock:
+            rows = self._connection.execute(
+                f"""
+                SELECT safe_payload_json FROM events
+                WHERE turn_id IN ({placeholders}) AND event_type LIKE 'model.%'
+                ORDER BY observed_at, rowid
+                """,
+                turn_ids,
+            ).fetchall()
+        return [json.loads(row["safe_payload_json"]) for row in rows]
+
     def summary(self, **filters: Any) -> dict[str, Any]:
         rows = self.list_turns(limit=500, **filters)
         agents = self.list_agents(limit=500, **filters)
@@ -535,8 +608,15 @@ class TelemetryStore:
                     f"SELECT DISTINCT {column} FROM turns WHERE {column} IS NOT NULL ORDER BY {column} LIMIT 500"
                 ).fetchall()
                 dimensions[response_key] = [str(row[0]) for row in found]
+        fleet = {
+            "active_agents": sum(agent["current_turn_id"] is not None for agent in agents),
+            **self._aggregate(rows),
+        }
+        fleet["model_metrics"] = self._model_metrics(
+            self._model_events_for_turns([str(row["id"]) for row in rows])
+        )
         return {
-            "fleet": {"active_agents": sum(agent["current_turn_id"] is not None for agent in agents), **self._aggregate(rows)},
+            "fleet": fleet,
             "groups": {
                 "agents": groups("agent_id"),
                 "harnesses": groups("harness"),
@@ -610,55 +690,7 @@ class TelemetryStore:
             for item in event_rows
             if item["event_type"].startswith("model.")
         ]
-        terminal_model_events = [
-            event
-            for event in model_events
-            if event["event_type"] in {"model.completed", "model.failed"}
-        ]
-        ttft_values = [
-            float(event["attributes"]["elapsed_ms"])
-            for event in model_events
-            if event["event_type"] == "model.first_token"
-            and "elapsed_ms" in event["attributes"]
-        ]
-        exact_decode_events = [
-            event
-            for event in terminal_model_events
-            if event["event_type"] == "model.completed"
-            and event["attributes"].get("correlation") == "exact"
-            and isinstance(event["attributes"].get("decode_ms"), (int, float))
-            and event["attributes"].get("decode_ms", 0) > 0
-            and isinstance(event["attributes"].get("output_tokens"), int)
-        ]
-        decode_ms = sum(float(event["attributes"]["decode_ms"]) for event in exact_decode_events)
-        output_tokens = sum(int(event["attributes"]["output_tokens"]) for event in exact_decode_events)
-        correlations: dict[str, int] = {}
-        for event in terminal_model_events:
-            correlation = str(event["attributes"].get("correlation", "unavailable"))
-            correlations[correlation] = correlations.get(correlation, 0) + 1
-
-        model_metrics = {
-            "call_count": sum(
-                event["event_type"] == "model.request_started" for event in model_events
-            ),
-            "completed_count": sum(
-                event["event_type"] == "model.completed" for event in model_events
-            ),
-            "failed_count": sum(event["event_type"] == "model.failed" for event in model_events),
-            "ttft_ms": {
-                "count": len(ttft_values),
-                "p50": self._percentile(ttft_values, 0.50),
-                "p95": self._percentile(ttft_values, 0.95),
-                "minimum": min(ttft_values) if ttft_values else None,
-                "maximum": max(ttft_values) if ttft_values else None,
-            },
-            "exact_output_tokens": output_tokens,
-            "exact_decode_ms": decode_ms or None,
-            "output_tokens_per_second": output_tokens / (decode_ms / 1000)
-            if decode_ms > 0
-            else None,
-            "correlation_counts": correlations,
-        }
+        model_metrics = self._model_metrics(model_events)
 
         return {
             "turn": dict(row),

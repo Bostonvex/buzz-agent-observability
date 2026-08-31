@@ -92,6 +92,7 @@ function renderFilters() {
 
 function renderSummary() {
   const fleet = state.summary.fleet;
+  const model = fleet.model_metrics || {};
   $("#active-agent-count").textContent = fleet.active_agents;
   $("#turn-count").textContent = fleet.turn_count;
   $("#duration-p50").textContent = formatMs(fleet.metrics.duration_ms.p50);
@@ -102,6 +103,13 @@ function renderSummary() {
     badge.className = `quality ${durationQuality}`;
   }
   $("#success-rate").textContent = formatRate(fleet.success_rate);
+  const outputTps = model.output_tokens_per_second;
+  $("#fleet-output-tps").textContent = Number.isFinite(outputTps) ? outputTps.toFixed(1) : "—";
+  const outputTpsQuality = Number.isFinite(outputTps) ? "exact" : "unavailable";
+  $("#fleet-output-tps-quality").textContent = outputTpsQuality;
+  $("#fleet-output-tps-quality").className = `quality ${outputTpsQuality}`;
+  const exactCalls = model.exact_call_count || 0;
+  $("#fleet-output-tps-coverage").textContent = `${exactCalls} exact call${exactCalls === 1 ? "" : "s"}`;
   $("#event-count").textContent = state.health.events;
   $("#journal-mode").textContent = `SQLite ${state.health.journal_mode.toUpperCase()}`;
   $("#turn-outcomes").textContent = `${fleet.outcomes.failed || 0} failed · ${fleet.outcomes.cancelled || 0} cancelled`;

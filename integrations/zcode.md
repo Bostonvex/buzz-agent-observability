@@ -10,12 +10,21 @@ Configuration uses the same shared variables documented in the
 Missing or unsafe private files, invalid configuration, observer exceptions,
 timeouts, and collector outages all fail open.
 
-The current model timing proxy is not enabled for ZCode. ZCode's selected live
-provider uses the Anthropic `/v1/messages` shape, while the proxy intentionally
-allows only OpenAI-compatible completion and Responses paths. ACP lifecycle
-telemetry continues normally. Add ZCode model timing only after the proxy has a
-reviewed, byte-parity Anthropic adapter and corresponding streaming-usage
-tests; do not redirect the current provider through the OpenAI path proxy.
+For exact Anthropic Messages TTFT, token counts, decode time, and output tokens
+per second, install the optional proxy and add:
+
+```text
+BUZZ_MODEL_PROXY_ENABLED=1
+BUZZ_MODEL_PROXY_BIN=/absolute/path/to/buzz-model-proxy
+```
+
+The bridge resolves its configured Anthropic base URL only when supervised
+proxy mode is requested, starts an ephemeral loopback sidecar, and redirects
+only the ZCode model subprocess. The proxy receives neither
+`ANTHROPIC_API_KEY` nor other model credentials; the model child receives
+neither collector token paths nor proxy controls. Missing configuration or a
+startup failure falls back to the direct upstream. An unexpected proxy exit
+terminates the harness so Buzz can restart the supervised process tree.
 
 Before observation, the ZCode adapter reduces each message to the minimum
 shape needed by the shared observer. It removes prompt and completion text,

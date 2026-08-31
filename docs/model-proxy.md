@@ -1,4 +1,4 @@
-# Optional OpenAI-compatible model timing proxy
+# Optional OpenAI- and Anthropic-compatible model timing proxy
 
 The model proxy adds exact HTTP timing and exact response usage when a model
 server exposes it. It is optional: ACP-only telemetry and every harness remain
@@ -8,14 +8,18 @@ The implementation follows the current OpenAI shapes for
 [Chat Completions streaming chunks](https://developers.openai.com/api/reference/cli/resources/chat/subresources/completions)
 and [Responses usage/status fields](https://developers.openai.com/api/reference/cli/resources/responses/methods/create).
 It also works with compatible local servers that preserve those fields.
+Anthropic Messages support follows the documented
+[streaming event sequence](https://platform.claude.com/docs/en/build-with-claude/streaming):
+`message_start`, content-block events, cumulative usage in `message_delta`, and
+in-stream `error` events.
 
 ## Security and privacy boundary
 
 - The listener binds only to a loopback address and defaults to an ephemeral
   port.
 - Every model request goes to one startup-configured upstream origin. Only
-  `/v1/chat/completions`, `/v1/completions`, and `/v1/responses` are allowed by
-  default; a request cannot choose a host.
+  `/v1/chat/completions`, `/v1/completions`, `/v1/responses`, and
+  `/v1/messages` are allowed by default; a request cannot choose a host.
 - Request bodies are streamed without JSON parsing. Authorization and other
   upstream headers are forwarded but never logged or stored.
 - `X-Buzz-Telemetry-*` correlation headers are removed before forwarding.
@@ -24,7 +28,7 @@ It also works with compatible local servers that preserve those fields.
 - Collector delivery uses a bounded background queue. A missing collector,
   timeout, invalid private file, or rejected event never changes the model
   response.
-- The DeepSeek and Qwen launchers start the proxy with a minimal environment
+- The DeepSeek, Qwen, and ZCode launchers start the proxy with a minimal environment
   allowlist. Model/API credentials stay only in the model client; collector
   token paths and proxy controls are removed from the model child environment.
 - The authenticated context endpoint accepts only normalized identifiers and
@@ -65,7 +69,7 @@ to whether a static agent identity was configured.
 
 ### Supervised harness sidecar
 
-The DeepSeek and Qwen harness integrations can supervise one ephemeral proxy
+The DeepSeek, Qwen, and ZCode harness integrations can supervise one ephemeral proxy
 per harness process. Add these variables alongside the normal telemetry
 configuration:
 
@@ -98,10 +102,21 @@ For streaming responses, the proxy records:
 - decode time from first generated delta to final byte; and
 - input, output, cached, and reasoning tokens when present.
 
+For Anthropic streams, non-empty `text_delta`, `thinking_delta`, and
+`input_json_delta` payloads count as generated output; a `tool_use` block start
+also counts. Initial usage is read from `message_start`, final cumulative output
+usage from `message_delta`, and an SSE `error` becomes a metadata-only failed
+model call even when the HTTP status was 200. Event content is never retained.
+
 For non-streaming responses, connection, first byte, final byte, status, and
 usage are exact. TTFT and decode time are unavailable because a complete JSON
 response cannot reveal when its first token was generated. Output throughput is
-shown only when both output tokens and decode time are exact.
+shown only when both output tokens and decode time are exact. Per-turn
+throughput is available in the turn detail. **Fleet output tok/s** is a weighted
+aggregate: total exact output tokens divided by total exact decode seconds
+across the current dashboard filters. It is intentionally not an average of
+per-call rates. The card also shows how many exactly correlated calls
+contributed; ambiguous and unavailable correlations are excluded.
 
 The dashboard aligns cross-process model events by wall-clock timestamps;
 process-local monotonic clocks are used only for duration calculations.
@@ -114,11 +129,10 @@ connection and emit a metadata-only cancellation failure. Incoming requests
 must use `Content-Length`; chunked request uploads are rejected. The default
 request cap is 256 MiB.
 
-The supervised mode currently supports DeepSeek and Qwen when their configured
-upstream accepts OpenAI-compatible paths. Do not enable it for an Anthropic
-`/v1/messages` client; that path is intentionally outside the fixed allowlist.
-In particular, ZCode must remain direct while its selected provider uses the
-Anthropic API shape.
+The supervised mode supports DeepSeek and Qwen with OpenAI-compatible
+upstreams and ZCode with its Anthropic Messages upstream. Base-path prefixes
+such as `/api/anthropic` are preserved exactly once when `/v1/messages` is
+forwarded.
 
 Rollback is immediate. In supervised mode set
 `BUZZ_MODEL_PROXY_ENABLED=0` or remove both `BUZZ_MODEL_PROXY_*` variables and

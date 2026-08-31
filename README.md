@@ -7,7 +7,7 @@ Release 0.1.0 includes:
 - A loopback-only collector, SQLite history, live SSE, JSON APIs, and CSV export.
 - Fleet, agent, turn-waterfall, exact model timing, and shared infrastructure views.
 - A dependency-free, fail-open ACP observer integrated with the DeepSeek, Qwen Code, and ZCode harnesses.
-- An optional fixed-upstream OpenAI-compatible timing proxy.
+- An optional fixed-upstream OpenAI- and Anthropic-compatible timing proxy.
 - Optional vLLM, local NVIDIA, strict-host-verified remote NVIDIA, and generic JSON-command providers.
 - Versioned installation, diagnostics, backup, upgrade, rollback, recoverable uninstall, and service examples.
 
@@ -57,7 +57,7 @@ Integration-specific instructions are available for [DeepSeek](integrations/deep
 
 ## Optional model and infrastructure telemetry
 
-`buzz-model-proxy` is a loopback-only, fixed-upstream sidecar for exact connection, first-byte, streaming TTFT, decode, duration, and usage metadata. It preserves response bytes and errors and can correlate with the active ACP turn. See the [model proxy guide](docs/model-proxy.md).
+`buzz-model-proxy` is a loopback-only, fixed-upstream sidecar for exact connection, first-byte, streaming TTFT, decode, duration, and usage metadata. It supports OpenAI-compatible endpoints and Anthropic Messages, preserves response bytes and errors, and can correlate with the active ACP turn. The dashboard's **Fleet output tok/s** card reports weighted exact throughput across the currently filtered calls. See the [model proxy guide](docs/model-proxy.md).
 
 The collector can also poll shared infrastructure:
 

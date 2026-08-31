@@ -227,10 +227,56 @@ class TelemetryStoreTests(unittest.TestCase):
         self.assertEqual(metrics["ttft_ms"]["p50"], 150)
         self.assertEqual(metrics["exact_output_tokens"], 25)
         self.assertEqual(metrics["output_tokens_per_second"], 50)
+        self.assertEqual(metrics["exact_call_count"], 1)
+        fleet_model = self.store.summary()["fleet"]["model_metrics"]
+        self.assertEqual(fleet_model["exact_call_count"], 1)
+        self.assertEqual(fleet_model["exact_output_tokens"], 25)
+        self.assertEqual(fleet_model["exact_decode_ms"], 500)
+        self.assertEqual(fleet_model["output_tokens_per_second"], 50)
         model_completed = next(
             item for item in detail["timeline"] if item["event_type"] == "model.completed"
         )
         self.assertEqual(model_completed["relative_ms"], 750)
+
+    def test_fleet_output_throughput_is_weighted_across_exact_calls(self) -> None:
+        events = []
+        for turn_id, output_tokens, decode_ms, correlation in (
+            ("turn-one", 20, 500, "exact"),
+            ("turn-two", 30, 1500, "exact"),
+            ("turn-three", 999, 1, "ambiguous"),
+        ):
+            events.extend(
+                [
+                    event("turn.started", turn_id=turn_id),
+                    event(
+                        "model.request_started",
+                        turn_id=turn_id,
+                        attributes={
+                            "correlation": correlation,
+                            "measurement_quality": "exact",
+                        },
+                    ),
+                    event(
+                        "model.completed",
+                        turn_id=turn_id,
+                        attributes={
+                            "duration_ms": decode_ms + 100,
+                            "decode_ms": decode_ms,
+                            "http_status": 200,
+                            "output_tokens": output_tokens,
+                            "correlation": correlation,
+                            "measurement_quality": "exact",
+                        },
+                    ),
+                ]
+            )
+        self.store.insert_events([validate_event(item) for item in events])
+        metrics = self.store.summary()["fleet"]["model_metrics"]
+        self.assertEqual(metrics["call_count"], 3)
+        self.assertEqual(metrics["exact_call_count"], 2)
+        self.assertEqual(metrics["exact_output_tokens"], 50)
+        self.assertEqual(metrics["exact_decode_ms"], 2000)
+        self.assertEqual(metrics["output_tokens_per_second"], 25)
 
 
 if __name__ == "__main__":

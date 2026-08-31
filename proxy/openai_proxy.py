@@ -1,4 +1,4 @@
-"""Loopback-only, content-blind OpenAI-compatible timing proxy.
+"""Loopback-only, content-blind OpenAI/Anthropic-compatible timing proxy.
 
 Request bodies and authorization headers are streamed to one configured
 upstream and are never parsed, logged, or stored. Response inspection is
@@ -35,7 +35,7 @@ from urllib.request import Request, urlopen
 
 PROXY_VERSION = "0.1.0"
 DEFAULT_ALLOWED_PATHS = frozenset(
-    {"/v1/chat/completions", "/v1/completions", "/v1/responses"}
+    {"/v1/chat/completions", "/v1/completions", "/v1/responses", "/v1/messages"}
 )
 MAX_CONTEXT_BYTES = 8 * 1024
 MAX_INSPECT_BYTES = 8 * 1024 * 1024
@@ -311,6 +311,7 @@ class ResponseInspector:
         self.streaming = "text/event-stream" in content_type.lower()
         self.first_generated_at: float | None = None
         self.usage: dict[str, int] = {}
+        self.stream_error_code: str | None = None
         self._buffer = bytearray()
         self._event_data: list[bytes] = []
         self._inspect_enabled = True
@@ -344,6 +345,9 @@ class ResponseInspector:
             found = self._counter(output_details.get("reasoning_tokens"))
             if found is not None:
                 self.usage["reasoning_tokens"] = found
+        cache_read = self._counter(value.get("cache_read_input_tokens"))
+        if cache_read is not None:
+            self.usage["cached_tokens"] = cache_read
 
     @staticmethod
     def _generated(value: dict[str, Any]) -> bool:
@@ -362,6 +366,19 @@ class ResponseInspector:
                     if delta.get("tool_calls") or delta.get("function_call"):
                         return True
         event_type = value.get("type")
+        if event_type == "content_block_start":
+            content_block = value.get("content_block")
+            return isinstance(content_block, dict) and content_block.get("type") in {
+                "tool_use",
+                "server_tool_use",
+            }
+        if event_type == "content_block_delta":
+            delta = value.get("delta")
+            if not isinstance(delta, dict):
+                return False
+            for field in ("text", "partial_json", "thinking"):
+                if isinstance(delta.get(field), str) and delta[field]:
+                    return True
         if isinstance(event_type, str) and event_type.endswith(".delta"):
             return bool(value.get("delta")) and event_type in {
                 "response.output_text.delta",
@@ -378,6 +395,13 @@ class ResponseInspector:
         response = value.get("response")
         if isinstance(response, dict):
             self._usage(response.get("usage"))
+        message = value.get("message")
+        if isinstance(message, dict):
+            self._usage(message.get("usage"))
+        if value.get("type") == "error":
+            error = value.get("error")
+            code = error.get("type") if isinstance(error, dict) else None
+            self.stream_error_code = _safe_identifier(code, "stream_error")
         if self.first_generated_at is None and self._generated(value):
             self.first_generated_at = observed_at
 
@@ -746,14 +770,26 @@ def make_proxy_handler(state: ProxyState) -> type[BaseHTTPRequestHandler]:
                         0.0, (finished - inspector.first_generated_at) * 1_000
                     )
                 common.update(inspector.usage)
-                event_type = "model.completed" if response.status < 400 else "model.failed"
+                event_type = (
+                    "model.completed"
+                    if response.status < 400 and inspector.stream_error_code is None
+                    else "model.failed"
+                )
                 if event_type == "model.failed":
-                    common.update(
-                        {
-                            "error_category": "upstream_http",
-                            "error_code": f"http_{response.status}",
-                        }
-                    )
+                    if inspector.stream_error_code is not None:
+                        common.update(
+                            {
+                                "error_category": "upstream_stream",
+                                "error_code": inspector.stream_error_code,
+                            }
+                        )
+                    else:
+                        common.update(
+                            {
+                                "error_category": "upstream_http",
+                                "error_code": f"http_{response.status}",
+                            }
+                        )
                 state.sink.enqueue(state.event(event_type, context, span_id, common, finished))
             except (BrokenPipeError, ConnectionResetError):
                 self.close_connection = True
@@ -859,7 +895,9 @@ def build_state(args: argparse.Namespace) -> ProxyState:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Optional content-blind OpenAI timing proxy")
+    parser = argparse.ArgumentParser(
+        description="Optional content-blind OpenAI/Anthropic timing proxy"
+    )
     parser.add_argument(
         "--upstream",
         default=os.environ.get("BUZZ_MODEL_PROXY_UPSTREAM"),

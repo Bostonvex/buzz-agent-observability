@@ -15,7 +15,9 @@ class DashboardSafetyTests(unittest.TestCase):
         page = (root / "index.html").read_text(encoding="utf-8")
         script = (root / "app.js").read_text(encoding="utf-8")
         for identifier in (
-            "fleet-view", "agent-view", "turn-view", "status-banner", "shared-context", "shared-charts"
+            "fleet-view", "agent-view", "turn-view", "status-banner", "shared-context",
+            "shared-charts", "fleet-output-tps", "fleet-output-tps-quality",
+            "fleet-output-tps-coverage",
         ):
             self.assertIn(f'id="{identifier}"', page)
         for label in ("exact", "derived", "estimated", "unavailable"):
@@ -25,6 +27,8 @@ class DashboardSafetyTests(unittest.TestCase):
         self.assertIn("URLSearchParams", script)
         self.assertIn("Model p50 TTFT", script)
         self.assertIn("Model output tok/s", script)
+        self.assertIn("Fleet output tok/s", page)
+        self.assertIn("output_tokens_per_second", script)
         self.assertIn("relative_ms", script)
         self.assertIn("/api/v1/samples", script)
         self.assertIn("never assigned to an individual agent", page)

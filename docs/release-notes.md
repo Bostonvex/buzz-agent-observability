@@ -5,9 +5,13 @@
 - Three ACP harness integrations share one metadata-only event contract.
 - The dashboard includes filtered fleet, agent, turn-waterfall, and exact model
   timing views.
-- The optional OpenAI-compatible sidecar preserves streaming and non-streaming
-  responses while recording connection, first-byte, first-generated-chunk,
-  completion, and usage metadata.
+- The optional OpenAI- and Anthropic-compatible sidecar preserves streaming and
+  non-streaming responses while recording connection, first-byte,
+  first-generated-chunk, completion, and usage metadata. Anthropic Messages
+  includes cumulative streaming usage and HTTP-200 SSE error recognition.
+- The dashboard includes weighted fleet output tokens/second across exactly
+  correlated calls in the current filter scope, with contributing-call
+  coverage shown beside the metric.
 - Synthetic loopback proxy overhead measured 0.206 ms added p50 across 50
   non-streaming requests, below the 5 ms release threshold. See the
   [model proxy guide](model-proxy.md) for method and limitations.
