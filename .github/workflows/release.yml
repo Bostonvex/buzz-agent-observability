@@ -24,7 +24,7 @@ jobs:
       - run: python -m build
       - run: python scripts/check-release.py --write-checksums
       - run: ./scripts/test-install.sh dist/buzz_agent_observability-0.1.0-py3-none-any.whl
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: buzz-agent-observability-${{ github.ref_name }}
           path: |
