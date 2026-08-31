@@ -38,6 +38,14 @@ class EventSchemaTests(unittest.TestCase):
         with self.assertRaisesRegex(EventValidationError, "unknown_attribute"):
             validate_event(submitted)
 
+    def test_cancellation_reason_is_strictly_enumerated(self) -> None:
+        valid = validate_event(
+            event("turn.cancelled", attributes={"cancellation_reason": "client_requested"})
+        )
+        self.assertEqual(valid["attributes"]["cancellation_reason"], "client_requested")
+        with self.assertRaisesRegex(EventValidationError, "invalid_cancellation_reason"):
+            validate_event(event("turn.cancelled", attributes={"cancellation_reason": "guess"}))
+
     def test_batch_is_bounded(self) -> None:
         with self.assertRaisesRegex(EventValidationError, "batch_too_large"):
             validate_batch([event() for _ in range(3)], maximum_events=2)

@@ -172,8 +172,25 @@ test("cancellation and JSON-RPC failure produce exactly one terminal turn event"
   observer.observeServerMessage({ id: "b", error: { code: -32_603, message: "sensitive backend error" } }, 400);
 
   assert.equal(transport.events.filter((event) => event.event_type === "turn.cancelled").length, 1);
+  assert.equal(
+    transport.events.find((event) => event.event_type === "turn.cancelled").attributes.cancellation_reason,
+    "client_requested",
+  );
   assert.equal(transport.events.filter((event) => event.event_type === "turn.failed").length, 1);
   assert.doesNotMatch(JSON.stringify(transport.events), /sensitive backend error/u);
+});
+
+test("cancellation reasons distinguish superseded and agent-reported turns", () => {
+  const { transport, observer } = setup();
+  establishSession(observer, createClock());
+  observer.observeClientMessage({ id: "a", method: "session/prompt", params: { sessionId: "raw-session-secret" } }, 100);
+  observer.observeClientMessage({ id: "b", method: "session/prompt", params: { sessionId: "raw-session-secret" } }, 200);
+  observer.observeServerMessage({ id: "b", result: { stopReason: "cancelled" } }, 300);
+  assert.deepEqual(
+    transport.events.filter((event) => event.event_type === "turn.cancelled")
+      .map((event) => event.attributes.cancellation_reason),
+    ["superseded_by_prompt", "agent_reported"],
+  );
 });
 
 test("replayed and background updates without an active prompt are ignored", () => {

@@ -51,6 +51,39 @@ class TelemetryStoreTests(unittest.TestCase):
         self.assertEqual(turn["duration_ms"], 820)
         self.assertEqual(turn["tool_count"], 2)
 
+    def test_model_events_do_not_overwrite_terminal_turn_fields(self) -> None:
+        cancelled = validate_event(
+            event(
+                "turn.cancelled",
+                observed_at="2026-08-31T12:01:00Z",
+                attributes={
+                    "duration_ms": 60_000,
+                    "tool_count": 3,
+                    "measurement_quality": "exact",
+                    "cancellation_reason": "client_requested",
+                },
+            )
+        )
+        model_failure = validate_event(
+            event(
+                "model.failed",
+                observed_at="2026-08-31T12:01:01Z",
+                attributes={
+                    "duration_ms": 900,
+                    "http_status": 200,
+                    "error_category": "client_cancelled",
+                    "correlation": "exact",
+                    "measurement_quality": "exact",
+                },
+            )
+        )
+        self.store.insert_events([cancelled, model_failure])
+        turn = self.store.list_turns()[0]
+        self.assertEqual(turn["duration_ms"], 60_000)
+        self.assertEqual(turn["tool_count"], 3)
+        self.assertEqual(turn["cancellation_reason"], "client_requested")
+        self.assertIsNone(turn["error_category"])
+
     def test_raw_event_retention_does_not_remove_turn_summary(self) -> None:
         old = validate_event(event(observed_at="2020-01-01T00:00:00Z"))
         self.store.insert_events([old])

@@ -242,7 +242,9 @@ class AcpObserver {
       this.#finishTurn(oldest, "failed", now, "observer_capacity");
     }
     const previous = session.currentTurnKey ? this.turns.get(session.currentTurnKey) : null;
-    if (previous && !previous.ended) this.#finishTurn(previous, "cancelled", now);
+    if (previous && !previous.ended) {
+      this.#finishTurn(previous, "cancelled", now, null, "superseded_by_prompt");
+    }
     const turn = {
       key,
       turnId: this.uuid(),
@@ -401,7 +403,7 @@ class AcpObserver {
     }
   }
 
-  #finishTurn(turn, outcome, now, errorCode = null) {
+  #finishTurn(turn, outcome, now, errorCode = null, cancellationReason = null) {
     if (!turn || turn.ended) return;
     turn.ended = true;
     const attributes = measurementAttributes(turn, now);
@@ -413,6 +415,9 @@ class AcpObserver {
       attributes.error_code = safeIdentifier(errorCode, "unknown_failure");
     }
     if (eventType === "turn.completed") attributes.outcome = "completed";
+    if (eventType === "turn.cancelled" && cancellationReason) {
+      attributes.cancellation_reason = cancellationReason;
+    }
     this.#emit(eventType, this.#context(turn.session, turn), attributes, now);
     try {
       this.contextSink?.end?.(turn.turnId);
@@ -458,7 +463,9 @@ class AcpObserver {
         const session = this.sessions.get(message?.params?.sessionId);
         if (!session) return;
         for (const turnKey of [...session.activeTurnKeys]) {
-          this.#finishTurn(this.turns.get(turnKey), "cancelled", monotonicNow);
+          this.#finishTurn(
+            this.turns.get(turnKey), "cancelled", monotonicNow, null, "client_requested",
+          );
         }
       }
     });
@@ -486,7 +493,7 @@ class AcpObserver {
             const code = finiteNonNegative(Math.abs(Number(message.error.code)));
             this.#finishTurn(turn, "failed", monotonicNow, code === null ? "json_rpc_error" : `json_rpc_${code}`);
           } else if (stopReason === "cancelled") {
-            this.#finishTurn(turn, "cancelled", monotonicNow);
+            this.#finishTurn(turn, "cancelled", monotonicNow, null, "agent_reported");
           } else {
             this.#finishTurn(turn, "completed", monotonicNow);
           }

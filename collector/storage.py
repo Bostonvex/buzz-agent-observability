@@ -94,6 +94,7 @@ CREATE TABLE IF NOT EXISTS turns (
     measurement_quality TEXT,
     error_category TEXT,
     error_code TEXT,
+    cancellation_reason TEXT,
     harness TEXT,
     model TEXT,
     endpoint_id TEXT,
@@ -122,6 +123,7 @@ class TelemetryStore:
             self._connection.execute("PRAGMA synchronous = NORMAL")
             self._connection.executescript(MIGRATION)
             self._migrate_turn_columns()
+            self._repair_materialized_turns()
             self._repair_materialized_agents()
             self._connection.execute(
                 "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (1, ?)",
@@ -129,6 +131,10 @@ class TelemetryStore:
             )
             self._connection.execute(
                 "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (2, ?)",
+                (_utc_now(),),
+            )
+            self._connection.execute(
+                "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (3, ?)",
                 (_utc_now(),),
             )
             self._connection.commit()
@@ -178,6 +184,7 @@ class TelemetryStore:
             "measurement_quality": "TEXT",
             "error_category": "TEXT",
             "error_code": "TEXT",
+            "cancellation_reason": "TEXT",
             "harness": "TEXT",
             "model": "TEXT",
             "endpoint_id": "TEXT",
@@ -185,6 +192,40 @@ class TelemetryStore:
         for name, data_type in additions.items():
             if name not in existing:
                 self._connection.execute(f"ALTER TABLE turns ADD COLUMN {name} {data_type}")
+
+    def _repair_materialized_turns(self) -> None:
+        """Restore authoritative turn fields after older cross-scope event folding."""
+        rows = self._connection.execute(
+            """
+            SELECT turn_id, event_type, observed_at, safe_payload_json
+            FROM events
+            WHERE turn_id IS NOT NULL
+              AND event_type IN ('turn.completed', 'turn.failed', 'turn.cancelled')
+            ORDER BY observed_at, rowid
+            """
+        ).fetchall()
+        for row in rows:
+            attributes = json.loads(row["safe_payload_json"])["attributes"]
+            self._connection.execute(
+                """
+                UPDATE turns SET ended_at = ?, outcome = ?, duration_ms = ?,
+                    max_stall_ms = ?, tool_count = ?, measurement_quality = ?,
+                    error_category = ?, error_code = ?, cancellation_reason = ?
+                WHERE id = ?
+                """,
+                (
+                    row["observed_at"],
+                    TERMINAL_OUTCOMES[row["event_type"]],
+                    attributes.get("duration_ms"),
+                    attributes.get("max_stall_ms"),
+                    attributes.get("tool_count"),
+                    attributes.get("measurement_quality"),
+                    attributes.get("error_category"),
+                    attributes.get("error_code"),
+                    attributes.get("cancellation_reason"),
+                    row["turn_id"],
+                ),
+            )
 
     @property
     def journal_mode(self) -> str:
@@ -243,6 +284,7 @@ class TelemetryStore:
             return
         attributes = event["attributes"]
         event_type = event["event_type"]
+        terminal_turn = event_type in TERMINAL_OUTCOMES
         ended_at = event["observed_at"] if event_type in TERMINAL_OUTCOMES else None
         outcome = TERMINAL_OUTCOMES.get(event_type)
         self._connection.execute(
@@ -251,8 +293,8 @@ class TelemetryStore:
                 id, agent_id, session_id, started_at, ended_at, outcome, ttfa_ms,
                 ttfvt_ms, first_tool_ms, duration_ms, max_stall_ms, tool_count,
                 measurement_quality, error_category, error_code, harness, model,
-                endpoint_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                cancellation_reason, endpoint_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 started_at = MIN(turns.started_at, excluded.started_at),
                 ended_at = COALESCE(excluded.ended_at, turns.ended_at),
@@ -270,6 +312,7 @@ class TelemetryStore:
                 measurement_quality = COALESCE(excluded.measurement_quality, turns.measurement_quality),
                 error_category = COALESCE(excluded.error_category, turns.error_category),
                 error_code = COALESCE(excluded.error_code, turns.error_code),
+                cancellation_reason = COALESCE(excluded.cancellation_reason, turns.cancellation_reason),
                 harness = COALESCE(excluded.harness, turns.harness),
                 model = COALESCE(excluded.model, turns.model),
                 endpoint_id = COALESCE(excluded.endpoint_id, turns.endpoint_id)
@@ -290,14 +333,16 @@ class TelemetryStore:
                 attributes.get("first_tool_ms")
                 if "first_tool_ms" in attributes
                 else attributes.get("elapsed_ms") if event_type == "turn.first_tool" else None,
-                attributes.get("duration_ms"),
-                attributes.get("max_stall_ms", attributes.get("gap_ms") if event_type == "turn.stall" else None),
-                attributes.get("tool_count"),
-                attributes.get("measurement_quality"),
-                attributes.get("error_category"),
-                attributes.get("error_code"),
+                attributes.get("duration_ms") if terminal_turn else None,
+                attributes.get("max_stall_ms", attributes.get("gap_ms") if event_type == "turn.stall" else None)
+                if event_type.startswith("turn.") else None,
+                attributes.get("tool_count") if terminal_turn else None,
+                attributes.get("measurement_quality") if event_type.startswith("turn.") else None,
+                attributes.get("error_category") if event_type == "turn.failed" else None,
+                attributes.get("error_code") if event_type == "turn.failed" else None,
                 event["harness"],
                 event["model"],
+                attributes.get("cancellation_reason") if event_type == "turn.cancelled" else None,
                 event["endpoint_id"],
             ),
         )
@@ -496,7 +541,7 @@ class TelemetryStore:
                        t.started_at, t.ended_at, t.outcome, t.ttfa_ms, t.ttfvt_ms,
                        t.first_tool_ms, t.duration_ms, t.max_stall_ms, t.tool_count,
                        t.measurement_quality, t.error_category, t.error_code,
-                       t.harness, t.model, t.endpoint_id
+                       t.cancellation_reason, t.harness, t.model, t.endpoint_id
                 FROM turns t JOIN agents a ON a.id = t.agent_id
                 {where} ORDER BY t.started_at DESC LIMIT ? OFFSET ?
                 """,
@@ -560,14 +605,19 @@ class TelemetryStore:
     @classmethod
     def _aggregate(cls, rows: list[dict[str, Any]]) -> dict[str, Any]:
         outcomes: dict[str, int] = {"completed": 0, "failed": 0, "cancelled": 0, "active": 0}
+        cancellation_reasons: dict[str, int] = {}
         for row in rows:
             outcome = row.get("outcome") or "active"
             outcomes[outcome] = outcomes.get(outcome, 0) + 1
+            if outcome == "cancelled":
+                reason = row.get("cancellation_reason") or "unavailable"
+                cancellation_reasons[reason] = cancellation_reasons.get(reason, 0) + 1
         terminal = sum(value for key, value in outcomes.items() if key != "active")
         return {
             "turn_count": len(rows),
             "active_turns": outcomes.get("active", 0),
             "outcomes": outcomes,
+            "cancellation_reasons": cancellation_reasons,
             "success_rate": outcomes.get("completed", 0) / terminal if terminal else None,
             "failure_rate": outcomes.get("failed", 0) / terminal if terminal else None,
             "cancellation_rate": outcomes.get("cancelled", 0) / terminal if terminal else None,

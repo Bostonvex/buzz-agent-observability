@@ -38,7 +38,7 @@ class DashboardSafetyTests(unittest.TestCase):
         page = (root / "index.html").read_text(encoding="utf-8")
         script = (root / "app.js").read_text(encoding="utf-8")
         for field in (
-            "agent_display_name", "outcome", "started_at", "ended_at", "ttfa_ms",
+            "agent_display_name", "outcome", "cancellation_reason", "started_at", "ended_at", "ttfa_ms",
             "ttfvt_ms", "first_tool_ms", "duration_ms", "output_tokens_per_second",
             "tool_count", "measurement_quality",
         ):

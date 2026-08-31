@@ -39,6 +39,15 @@ function formatRate(value) {
   return value === null || value === undefined ? "—" : `${Math.round(value * 100)}%`;
 }
 
+function cancellationLabel(value) {
+  return {
+    client_requested: "Client requested",
+    superseded_by_prompt: "Superseded by prompt",
+    agent_reported: "Agent reported",
+    unavailable: "Unavailable",
+  }[value] || "—";
+}
+
 function metricQuality(metric) {
   if (!metric?.count) return "unavailable";
   const qualities = Object.keys(metric.quality_counts || {}).filter((name) => metric.quality_counts[name]);
@@ -124,7 +133,12 @@ function renderSummary() {
   $("#fleet-output-tps-coverage").textContent = `${exactCalls} measured call${exactCalls === 1 ? "" : "s"} · ${attributedCalls} attributed`;
   $("#event-count").textContent = state.health.events;
   $("#journal-mode").textContent = `SQLite ${state.health.journal_mode.toUpperCase()}`;
-  $("#turn-outcomes").textContent = `${fleet.outcomes.failed || 0} failed · ${fleet.outcomes.cancelled || 0} cancelled`;
+  const cancellationReasons = fleet.cancellation_reasons || {};
+  const leadingCancellation = Object.entries(cancellationReasons).sort((left, right) => right[1] - left[1])[0];
+  const cancellationDetail = leadingCancellation
+    ? ` · ${cancellationLabel(leadingCancellation[0])}: ${leadingCancellation[1]}`
+    : "";
+  $("#turn-outcomes").textContent = `${fleet.outcomes.failed || 0} failed · ${fleet.outcomes.cancelled || 0} cancelled${cancellationDetail}`;
   const coverage = fleet.metrics.ttfvt_ms.count;
   const banner = $("#status-banner");
   if (fleet.turn_count > 0 && coverage < fleet.turn_count) {
@@ -247,7 +261,7 @@ function renderTurns() {
       : "none");
   }
   if (!state.turns.length) {
-    body.append(emptyRow(11, "No turns stored in this window."));
+    body.append(emptyRow(12, "No turns stored in this window."));
     toggle.hidden = true;
     return;
   }
@@ -282,6 +296,7 @@ function renderTurns() {
     row.append(agentCell);
     const outcome = turn.outcome || "active";
     row.append(cell(outcome, `state state-${outcome}`));
+    row.append(cell(turn.outcome === "cancelled" ? cancellationLabel(turn.cancellation_reason) : "—", "muted"));
     row.append(cell(formatDateTime(turn.started_at), "muted"));
     row.append(cell(formatDateTime(turn.ended_at), "muted"));
     row.append(cell(formatMs(turn.ttfa_ms)));
@@ -405,6 +420,7 @@ async function openTurn(turnId) {
     metricCard("Model calls", model.call_count ?? 0, model.call_count ? "exact" : "unavailable"),
     metricCard("Model p50 TTFT", formatMs(model.ttft_ms?.p50), model.ttft_ms?.count ? "exact" : "unavailable"),
     metricCard("Model output tok/s", model.output_tokens_per_second === null || model.output_tokens_per_second === undefined ? "—" : model.output_tokens_per_second.toFixed(1), model.output_tokens_per_second === null || model.output_tokens_per_second === undefined ? "unavailable" : "exact"),
+    metricCard("Cancellation", turn.outcome === "cancelled" ? cancellationLabel(turn.cancellation_reason) : "—", turn.cancellation_reason ? "exact" : "unavailable"),
   );
   renderWaterfall(detail.timeline, turn.duration_ms);
   const shared = $("#shared-context");
@@ -477,7 +493,7 @@ document.addEventListener("click", (event) => {
     } else {
       state.turnSort = {
         key,
-        direction: ["agent_display_name", "outcome", "measurement_quality"].includes(key) ? "asc" : "desc",
+        direction: ["agent_display_name", "outcome", "cancellation_reason", "measurement_quality"].includes(key) ? "asc" : "desc",
       };
     }
     renderTurns();

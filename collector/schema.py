@@ -98,7 +98,10 @@ EVENT_ATTRIBUTES = {
         }
     ),
     "turn.cancelled": frozenset(
-        {"duration_ms", "ttfa_ms", "ttfvt_ms", "first_tool_ms", "max_stall_ms", "tool_count"}
+        {
+            "duration_ms", "ttfa_ms", "ttfvt_ms", "first_tool_ms", "max_stall_ms",
+            "tool_count", "cancellation_reason",
+        }
     ),
     "tool.started": frozenset({"tool_kind", "status"}),
     "tool.updated": frozenset({"tool_kind", "status", "elapsed_ms"}),
@@ -140,6 +143,9 @@ EVENT_ATTRIBUTES = {
 
 QUALITY_VALUES = frozenset({"exact", "derived", "estimated", "unavailable"})
 CORRELATION_VALUES = frozenset({"exact", "ambiguous", "unavailable"})
+CANCELLATION_REASON_VALUES = frozenset(
+    {"client_requested", "superseded_by_prompt", "agent_reported"}
+)
 
 NUMERIC_ATTRIBUTES = frozenset(
     {
@@ -292,6 +298,10 @@ def _attributes(event_type: str, value: Any) -> dict[str, Any]:
         elif key == "correlation":
             if item not in CORRELATION_VALUES:
                 _fail("invalid_correlation", path)
+            result[key] = item
+        elif key == "cancellation_reason":
+            if item not in CANCELLATION_REASON_VALUES:
+                _fail("invalid_cancellation_reason", path)
             result[key] = item
         elif key in STRING_ATTRIBUTES:
             result[key] = _safe_string(item, path, maximum=128, identifier=False)
