@@ -19,3 +19,10 @@ correlation headers before forwarding.
 The collector validates before writing to SQLite. An event containing an unknown field, unknown attribute, control characters, or a common secret-shaped string is rejected as a whole. API validation errors identify only the field path and error category; they never echo the submitted value.
 
 Friendly agent names remain separate from stable privacy-preserving IDs. Future ACP observers must never use owner authorization metadata or private key material for identity. If a safe identity cannot be resolved, the observer should emit an unknown/session-derived identity and expose the mapping issue diagnostically.
+
+Infrastructure providers emit only numeric values, reviewed metric names, units,
+and operator-chosen safe source IDs. vLLM labels are discarded. NVIDIA process
+lists, GPU UUIDs, discovered hostnames, command arguments/output, URLs, SSH
+errors, and arbitrary JSON fields are not persisted. These events use the
+fixed `shared-infrastructure` schema identity and are excluded from agent
+state; dashboard correlation is by timestamp only.

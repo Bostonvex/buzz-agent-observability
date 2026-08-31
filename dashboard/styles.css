@@ -108,11 +108,21 @@ tbody tr:hover td { background: rgba(102, 220, 230, 0.025); }
 .shared-context p { margin: 7px 0 14px; color: var(--muted); font-size: 0.7rem; }
 .shared-chip { display: inline-flex; margin: 4px 7px 0 0; padding: 6px 8px; border-radius: 6px; background: rgba(241, 196, 109, 0.1); color: var(--amber); font-size: 0.65rem; }
 .empty-card { padding: 28px; color: var(--muted); text-align: center; }
+.shared-explanation { margin: -3px 0 13px; color: var(--muted); font-size: 0.7rem; line-height: 1.5; }
+.shared-charts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.shared-charts > .empty-card { grid-column: 1 / -1; border: 1px dashed var(--line); border-radius: 10px; }
+.shared-chart { min-width: 0; padding: 15px; border: 1px solid rgba(241, 196, 109, 0.25); border-radius: 10px; background: rgba(241, 196, 109, 0.035); }
+.shared-chart-heading span { display: block; overflow: hidden; color: var(--muted); font-size: 0.63rem; letter-spacing: 0.06em; text-overflow: ellipsis; text-transform: uppercase; white-space: nowrap; }
+.shared-chart-heading strong { display: block; margin-top: 8px; font: 650 1.3rem/1 system-ui, sans-serif; }
+.shared-chart-heading small { display: block; min-height: 14px; margin-top: 7px; overflow: hidden; color: var(--muted); font-size: 0.6rem; text-overflow: ellipsis; white-space: nowrap; }
+.shared-chart svg { display: block; width: 100%; height: 64px; margin-top: 8px; }
+.shared-chart polyline { fill: none; stroke: var(--amber); stroke-linecap: round; stroke-linejoin: round; stroke-width: 2; vector-effect: non-scaling-stroke; }
 
 @media (max-width: 1080px) {
   .filters { grid-template-columns: repeat(3, 1fr); }
   .metrics { grid-template-columns: repeat(3, 1fr); }
   .detail-metrics { grid-template-columns: repeat(3, 1fr); }
+  .shared-charts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 680px) {
   main { padding-top: 28px; }
@@ -121,4 +131,5 @@ tbody tr:hover td { background: rgba(102, 220, 230, 0.025); }
   .metrics { grid-template-columns: 1fr 1fr; }
   .detail-metrics, .split-grid { grid-template-columns: 1fr; }
   .waterfall-row { grid-template-columns: 130px 1fr; }
+  .shared-charts { grid-template-columns: 1fr; }
 }

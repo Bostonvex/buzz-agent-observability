@@ -73,6 +73,32 @@ class CollectorServerTests(unittest.TestCase):
             page = response.read().decode("utf-8")
         self.assertIn("Buzz Agent Observability", page)
         self.assertIn("default-src 'self'", response.headers["Content-Security-Policy"])
+        self.assertEqual(health["providers"], {})
+
+    def test_shared_samples_endpoint_does_not_create_an_agent(self) -> None:
+        shared = event(
+            "server.sample",
+            agent_id="shared-infrastructure",
+            display_name="Shared infrastructure",
+            turn_id=None,
+            attributes={
+                "metric_name": "requests_running",
+                "value": 2,
+                "unit": "requests",
+                "measurement_quality": "exact",
+            },
+        )
+        shared["harness"] = None
+        shared["model"] = None
+        shared["session_id"] = None
+        status, response = self._request(
+            "/api/v1/events", data=json.dumps(shared).encode("utf-8"), token=self.token
+        )
+        self.assertEqual(status, 202)
+        status, response = self._request("/api/v1/samples")
+        self.assertEqual(status, 200)
+        self.assertEqual(response["samples"][0]["attributes"]["metric_name"], "requests_running")
+        self.assertEqual(self.store.health()["agents"], 0)
 
     def test_token_failure_is_rejected(self) -> None:
         body = json.dumps(event()).encode("utf-8")

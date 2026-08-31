@@ -9,6 +9,8 @@ Latency values always carry a measurement-quality label. Missing data is shown
 as `unavailable` and is not silently estimated. Model-server and hardware
 samples shown beside a turn are labeled shared timestamp context and are never
 attributed to an individual agent without an exact correlation source.
+The shared infrastructure panel graphs recent allowlisted series independently
+and shows configured/degraded provider counts from the health endpoint.
 
 ## Query endpoints
 
@@ -18,6 +20,8 @@ attributed to an individual agent without an exact correlation source.
   turns.
 - `GET /api/v1/turns/{id}` returns a metadata-only waterfall and separately
   labeled shared context.
+- `GET /api/v1/samples` returns at most 500 recent shared model-server and
+  hardware samples.
 - `GET /api/v1/export.csv` returns at most 500 filtered turn rows and protects
   spreadsheet consumers from formula injection.
 

@@ -14,7 +14,9 @@ class DashboardSafetyTests(unittest.TestCase):
         root = Path(__file__).resolve().parent.parent / "dashboard"
         page = (root / "index.html").read_text(encoding="utf-8")
         script = (root / "app.js").read_text(encoding="utf-8")
-        for identifier in ("fleet-view", "agent-view", "turn-view", "status-banner", "shared-context"):
+        for identifier in (
+            "fleet-view", "agent-view", "turn-view", "status-banner", "shared-context", "shared-charts"
+        ):
             self.assertIn(f'id="{identifier}"', page)
         for label in ("exact", "derived", "estimated", "unavailable"):
             self.assertIn(label, page + script)
@@ -24,6 +26,8 @@ class DashboardSafetyTests(unittest.TestCase):
         self.assertIn("Model p50 TTFT", script)
         self.assertIn("Model output tok/s", script)
         self.assertIn("relative_ms", script)
+        self.assertIn("/api/v1/samples", script)
+        self.assertIn("never assigned to an individual agent", page)
 
 
 if __name__ == "__main__":

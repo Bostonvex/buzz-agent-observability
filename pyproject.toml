@@ -4,14 +4,14 @@ build-backend = "hatchling.build"
 
 [project]
 name = "buzz-agent-observability"
-version = "0.1.0.dev0"
+version = "0.1.0"
 description = "Local-first, metadata-only observability for Buzz coding agents"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Buzz Agent Observability contributors" }]
 classifiers = [
-  "Development Status :: 2 - Pre-Alpha",
+  "Development Status :: 3 - Alpha",
   "License :: OSI Approved :: MIT License",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3 :: Only",
@@ -24,7 +24,7 @@ buzz-model-proxy = "proxy.openai_proxy:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["collector", "proxy"]
-exclude = ["proxy/test"]
+exclude = ["proxy/test/**"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "dashboard" = "collector/dashboard"

@@ -5,8 +5,8 @@
 3. **DeepSeek MVP (complete):** per-agent turn, text, tool, cancellation, and process telemetry with existing protocol behavior preserved.
 4. **Agent and turn views (complete):** fleet summaries, p50/p95 metrics, filters, quality badges, and turn waterfalls.
 5. **Qwen Code integration (complete):** transparent piped ACP forwarding with byte/order/backpressure tests.
-6. **ZCode integration:** native TypeScript lifecycle hooks with replay and background-task protection.
-7. **Optional model timing proxy:** exact model TTFT and usage without content capture.
-8. **Model/hardware providers and packaging:** vLLM, optional read-only hardware collectors, service examples, backup, upgrade, rollback, and uninstall.
+6. **ZCode integration (complete):** native TypeScript lifecycle hooks with replay and background-task protection.
+7. **Optional model timing proxy (complete):** exact model TTFT and usage without content capture.
+8. **Model/hardware providers and packaging (complete):** vLLM, optional read-only hardware collectors, service examples, backup, upgrade, rollback, and recoverable uninstall.
 
-Harness integrations remain separate reviewed changes. Phase 1 deliberately contains no model proxy, SSH collector, hardware command execution, or harness modification.
+Harness integrations remain separate reviewed changes. All optional providers and the model proxy are disabled by default; ACP-only installation needs no model-node modification.

@@ -8,6 +8,7 @@ import json
 import logging
 import mimetypes
 import queue
+import sys
 import threading
 import time
 import csv
@@ -16,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import parse_qs, unquote, urlparse
 
 from collector import __version__
@@ -77,6 +78,7 @@ class AppState:
     ingest_token: str
     dashboard_dir: Path
     retention_days: int = 7
+    provider_diagnostics: Callable[[], dict[str, Any]] | None = None
 
     def __post_init__(self) -> None:
         self.broker = SseBroker()
@@ -98,6 +100,11 @@ class AppState:
 class CollectorHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
+
+    def handle_error(self, request: Any, client_address: Any) -> None:
+        if isinstance(sys.exc_info()[1], (BrokenPipeError, ConnectionResetError, TimeoutError)):
+            return
+        super().handle_error(request, client_address)
 
 
 def _bounded_limit(query: dict[str, list[str]], default: int = 100) -> int:
@@ -268,7 +275,9 @@ def make_handler(state: AppState) -> type[BaseHTTPRequestHandler]:
                 self._serve_asset("styles.css")
             elif parsed.path == "/healthz":
                 try:
-                    self._send_json(HTTPStatus.OK, state.store.health())
+                    health = state.store.health()
+                    health["providers"] = state.provider_diagnostics() if state.provider_diagnostics else {}
+                    self._send_json(HTTPStatus.OK, health)
                 except Exception:
                     LOGGER.exception("health check failed")
                     self._send_json(HTTPStatus.SERVICE_UNAVAILABLE, {"status": "unhealthy", "schema_version": 1})
@@ -287,6 +296,14 @@ def make_handler(state: AppState) -> type[BaseHTTPRequestHandler]:
                 )
             elif parsed.path == "/api/v1/summary":
                 self._send_json(HTTPStatus.OK, state.store.summary(**filters))
+            elif parsed.path == "/api/v1/samples":
+                sample_filters = {
+                    key: value for key, value in filters.items() if key in {"since", "until", "endpoint_id"}
+                }
+                self._send_json(
+                    HTTPStatus.OK,
+                    {"samples": state.store.list_samples(limit=_bounded_limit(query, 200), **sample_filters)},
+                )
             elif (agent_id := _path_identifier(parsed.path, "/api/v1/agents/", "/summary")) is not None:
                 summary = state.store.agent_summary(agent_id, **{key: value for key, value in filters.items() if key != "agent_id"})
                 if summary is None:
@@ -387,7 +404,7 @@ def make_handler(state: AppState) -> type[BaseHTTPRequestHandler]:
 
 def create_server(*, host: str, port: int, state: AppState) -> CollectorHTTPServer:
     if host != "127.0.0.1":
-        raise ValueError("Phase 1 permits only the literal loopback host 127.0.0.1")
+        raise ValueError("the collector permits only the literal loopback host 127.0.0.1")
     if port < 0 or port > 65535:
         raise ValueError("port must be between 0 and 65535")
     return CollectorHTTPServer((host, port), make_handler(state))

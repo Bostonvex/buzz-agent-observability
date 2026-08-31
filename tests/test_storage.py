@@ -62,6 +62,21 @@ class TelemetryStoreTests(unittest.TestCase):
         self.assertEqual(self.store.health()["events"], 0)
         self.assertEqual(self.store.health()["turns"], 1)
 
+    def test_backup_is_consistent_and_raw_purge_is_explicit(self) -> None:
+        submitted = validate_event(event(observed_at="2020-01-01T00:00:00Z"))
+        self.store.insert_events([submitted])
+        backup_path = Path(self.temporary.name) / "backup" / "telemetry.sqlite3"
+        self.store.backup_to(backup_path)
+        backup = TelemetryStore(backup_path)
+        try:
+            self.assertEqual(backup.health()["events"], 1)
+        finally:
+            backup.close()
+        self.assertEqual(backup_path.stat().st_mode & 0o777, 0o600)
+        deleted = self.store.purge_raw_before(datetime(2021, 1, 1, tzinfo=timezone.utc))
+        self.assertEqual(deleted, 1)
+        self.assertEqual(self.store.health()["turns"], 1)
+
     def test_late_older_event_does_not_regress_agent_state(self) -> None:
         completed = validate_event(
             event(

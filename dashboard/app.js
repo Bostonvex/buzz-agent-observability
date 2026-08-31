@@ -1,5 +1,5 @@
 const $ = (selector) => document.querySelector(selector);
-const state = { health: null, agents: [], turns: [], summary: null, refreshTimer: null };
+const state = { health: null, agents: [], turns: [], samples: [], summary: null, refreshTimer: null };
 
 function node(tag, text, className = "") {
   const element = document.createElement(tag);
@@ -141,6 +141,78 @@ function renderAgents() {
     row.append(cell(active, agent.current_turn_id ? "live-elapsed" : "muted"));
     row.append(cell(formatTime(agent.last_seen_at), "muted"));
     body.append(row);
+  }
+}
+
+function formatSample(value, unit) {
+  if (!Number.isFinite(value)) return "—";
+  if (unit === "ratio") return `${(value * 100).toFixed(1)}%`;
+  if (unit === "percent") return `${value.toFixed(1)}%`;
+  if (unit === "seconds") return formatMs(value * 1000);
+  return `${value.toLocaleString(undefined, { maximumFractionDigits: 2 })} ${unit}`;
+}
+
+function sparkline(values) {
+  const namespace = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(namespace, "svg");
+  svg.setAttribute("viewBox", "0 0 240 64");
+  svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", "Recent metric trend");
+  const minimum = Math.min(...values);
+  const maximum = Math.max(...values);
+  const span = maximum - minimum || 1;
+  const points = values.map((value, index) => {
+    const x = values.length === 1 ? 120 : (index / (values.length - 1)) * 236 + 2;
+    const y = 60 - ((value - minimum) / span) * 52;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  });
+  const polyline = document.createElementNS(namespace, "polyline");
+  polyline.setAttribute("points", points.join(" "));
+  svg.append(polyline);
+  return svg;
+}
+
+function renderInfrastructure() {
+  const container = $("#shared-charts");
+  container.replaceChildren();
+  const providers = Object.values(state.health.providers || {});
+  const degraded = providers.filter((provider) => provider.status === "degraded").length;
+  $("#provider-status").textContent = providers.length
+    ? `${providers.length} configured · ${degraded} degraded`
+    : "Providers disabled";
+  if (!state.samples.length) {
+    container.append(node("p", "No optional infrastructure samples in this window.", "empty-card"));
+    return;
+  }
+  const grouped = new Map();
+  for (const sample of state.samples) {
+    const attributes = sample.attributes;
+    const source = sample.event_type === "server.sample"
+      ? sample.endpoint_id
+      : `${attributes.provider_id}/${attributes.node_id}`;
+    const key = `${sample.event_type}|${source}|${attributes.metric_name}`;
+    if (!grouped.has(key)) grouped.set(key, []);
+    grouped.get(key).push(sample);
+  }
+  const series = [...grouped.values()]
+    .sort((left, right) => right[0].observed_at.localeCompare(left[0].observed_at))
+    .slice(0, 12);
+  for (const items of series) {
+    const latest = items[0];
+    const attributes = latest.attributes;
+    const source = latest.event_type === "server.sample"
+      ? latest.endpoint_id
+      : `${attributes.provider_id} · ${attributes.node_id}`;
+    const card = node("article", null, "shared-chart");
+    const heading = node("div", null, "shared-chart-heading");
+    heading.append(
+      node("span", attributes.metric_name.replaceAll("_", " ")),
+      node("strong", formatSample(attributes.value, attributes.unit)),
+      node("small", source || "shared infrastructure"),
+    );
+    const values = items.slice(0, 30).reverse().map((item) => Number(item.attributes.value));
+    card.append(heading, sparkline(values), quality(attributes.measurement_quality));
+    container.append(card);
   }
 }
 
@@ -300,16 +372,18 @@ async function refresh() {
   const parameters = queryParameters();
   const suffix = parameters.toString();
   try {
-    const [health, agents, turns, summary] = await Promise.all([
+    const [health, agents, turns, samples, summary] = await Promise.all([
       fetchJson("/healthz"), fetchJson(`/api/v1/agents?limit=100&${suffix}`),
-      fetchJson(`/api/v1/turns?limit=100&${suffix}`), fetchJson(`/api/v1/summary?${suffix}`),
+      fetchJson(`/api/v1/turns?limit=100&${suffix}`), fetchJson(`/api/v1/samples?limit=500&${suffix}`),
+      fetchJson(`/api/v1/summary?${suffix}`),
     ]);
-    Object.assign(state, { health, agents: agents.agents, turns: turns.turns, summary });
+    Object.assign(state, { health, agents: agents.agents, turns: turns.turns, samples: samples.samples, summary });
     setConnection("Collector live", "healthy");
     $("#last-updated").textContent = `Updated ${new Date().toLocaleTimeString()}`;
     $("#export-link").href = `/api/v1/export.csv?${suffix}`;
     renderSummary();
     renderAgents();
+    renderInfrastructure();
     renderTurns();
     renderFilters();
   } catch {

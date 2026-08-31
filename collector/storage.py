@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import threading
 from datetime import datetime, timedelta, timezone
@@ -294,9 +295,52 @@ class TelemetryStore:
                 )
                 if cursor.rowcount:
                     inserted += 1
-                    self._upsert_agent(event)
-                    self._upsert_turn(event)
+                    if event["event_type"] not in {"server.sample", "hardware.sample"}:
+                        self._upsert_agent(event)
+                        self._upsert_turn(event)
         return inserted
+
+    def list_samples(
+        self,
+        *,
+        limit: int = 200,
+        since: str | None = None,
+        until: str | None = None,
+        endpoint_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        clauses = ["event_type IN ('server.sample', 'hardware.sample')"]
+        values: list[Any] = []
+        if since is not None:
+            clauses.append("observed_at >= ?")
+            values.append(since)
+        if until is not None:
+            clauses.append("observed_at <= ?")
+            values.append(until)
+        if endpoint_id is not None:
+            clauses.append("endpoint_id = ?")
+            values.append(endpoint_id)
+        with self._lock:
+            rows = self._connection.execute(
+                f"""
+                SELECT event_type, observed_at, endpoint_id, safe_payload_json
+                FROM events WHERE {' AND '.join(clauses)}
+                ORDER BY observed_at DESC, rowid DESC LIMIT ?
+                """,
+                (*values, max(1, min(500, limit))),
+            ).fetchall()
+        samples = []
+        for row in rows:
+            event = json.loads(row["safe_payload_json"])
+            samples.append(
+                {
+                    "event_type": row["event_type"],
+                    "observed_at": row["observed_at"],
+                    "endpoint_id": row["endpoint_id"],
+                    "attributes": event["attributes"],
+                    "scope": "shared_context",
+                }
+            )
+        return samples
 
     @staticmethod
     def _filters(
@@ -629,6 +673,35 @@ class TelemetryStore:
         with self._lock, self._connection:
             cursor = self._connection.execute("DELETE FROM events WHERE observed_at < ?", (cutoff,))
         return cursor.rowcount
+
+    def purge_raw_before(self, before: datetime) -> int:
+        if before.tzinfo is None:
+            raise ValueError("purge cutoff must include a timezone")
+        cutoff = before.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+        with self._lock, self._connection:
+            cursor = self._connection.execute("DELETE FROM events WHERE observed_at < ?", (cutoff,))
+        return cursor.rowcount
+
+    def backup_to(self, destination: str | Path) -> Path:
+        target = Path(destination).expanduser()
+        if target.exists():
+            raise FileExistsError("backup destination already exists")
+        target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        backup = sqlite3.connect(target)
+        try:
+            with self._lock:
+                self._connection.backup(backup)
+        except Exception:
+            backup.close()
+            target.unlink(missing_ok=True)
+            raise
+        finally:
+            try:
+                backup.close()
+            except sqlite3.Error:
+                pass
+        os.chmod(target, 0o600)
+        return target
 
     def health(self) -> dict[str, Any]:
         with self._lock:

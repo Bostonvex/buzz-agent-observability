@@ -17,6 +17,6 @@
   ],
   "scripts": {
     "test": "node --test packages/acp-observer/test/*.test.mjs",
-    "check": "node --check packages/acp-observer/src/context.js && node --check packages/acp-observer/src/identity.js && node --check packages/acp-observer/src/observer.js && node --check packages/acp-observer/src/transport.js"
+    "check": "node --check dashboard/app.js && node --check packages/acp-observer/src/context.js && node --check packages/acp-observer/src/identity.js && node --check packages/acp-observer/src/observer.js && node --check packages/acp-observer/src/transport.js"
   }
 }

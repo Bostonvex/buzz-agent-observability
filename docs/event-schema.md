@@ -28,3 +28,10 @@ dashboard aligns ACP and proxy events from different processes using
 `observed_at`; durations remain based on each producer's monotonic clock.
 
 The contract intentionally has no generic tags or arbitrary metadata map. Schema evolution adds specific reviewed attributes and increments the schema version when compatibility requires it.
+
+`server.sample` permits only `metric_name`, numeric `value`, `unit`, and
+`measurement_quality`; its source is the envelope `endpoint_id`.
+`hardware.sample` additionally requires `provider_id` and `node_id`. Both use
+the fixed `shared-infrastructure` schema identity, have no session/turn/span,
+and are excluded from the agent table. They are shared fleet context, not
+evidence that one agent consumed a measured resource.

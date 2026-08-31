@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "scope": "hardware",
+  "provider_id": "custom-readonly",
+  "node_id": "accelerator-node-a",
+  "endpoint_id": null,
+  "argv": ["/opt/buzz-readonly-provider/bin/sample", "--json"],
+  "allowed_metrics": ["accelerator.utilization_percent", "accelerator.temperature_celsius"],
+  "timeout_seconds": 3
+}

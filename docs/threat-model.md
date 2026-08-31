@@ -19,7 +19,12 @@ The collector protects local telemetry integrity, the ingest token, agent identi
 | Model-proxy SSRF or credential disclosure | The optional proxy accepts one startup-configured upstream, fixes its allowed request paths, strips telemetry headers, and never logs/stores model headers or bodies. |
 | Forged model correlation | The proxy context endpoint requires the private collector token and accepts only the normalized identifier shape. Concurrent active turns are marked ambiguous unless explicitly selected. |
 | Telemetry blocks ACP or model forwarding | Observer and proxy delivery use bounded queues, short deadlines, no-throw entry points, and fail-open collector handling. |
+| Provider SSRF, redirects, or oversized metrics | vLLM uses one startup-configured `/metrics` URL without credentials/query/fragment, rejects redirects, allowlists metric families, discards labels, and caps the response. |
+| Command injection or mutation through hardware polling | Local/remote NVIDIA commands are fixed argv arrays with no shell; remote destinations reject metacharacters and require batch mode plus normal SSH host verification. |
+| Arbitrary generic-provider data | The executable must be absolute, argv is fixed at startup, stdout and time are bounded, stderr is discarded, and exact JSON fields/metric allowlists are enforced. |
+| Provider failure affects collection | Every provider has an independent thread and poll boundary; safe status counters are exposed while ingestion and agent execution continue. |
+| Release leaks local data or secrets | Source and archive scanners reject common credentials and workstation home paths; wheel contents, archive paths, sizes, and version metadata are checked before release. |
 
 ## Known limits
 
-Loopback is a security boundary, not user authentication for read endpoints: another process running as the same workstation user may read aggregate metadata. TLS and remote access are deliberately unsupported. Database file encryption is not included. The validator detects common secret formats but is not a substitute for preventing sensitive material at the producer.
+Loopback is a security boundary, not user authentication for read endpoints: another process running as the same workstation user may read aggregate metadata. TLS and remote access are deliberately unsupported. Database file encryption is not included. The validator detects common secret formats but is not a substitute for preventing sensitive material at the producer. A configured generic executable and the user's SSH client remain inside the operator trust boundary; the collector constrains invocation and persistence but cannot prove that an external program is read-only.

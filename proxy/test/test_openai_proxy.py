@@ -218,6 +218,9 @@ class ModelProxyTests(unittest.TestCase):
         context_id: str | None = None,
         path: str = "/v1/chat/completions",
     ) -> tuple[int, bytes, http.client.HTTPMessage]:
+        terminal_before = len(self.sink.by_type("model.completed")) + len(
+            self.sink.by_type("model.failed")
+        )
         submitted = body or json.dumps({"input": PRIVATE_REQUEST}).encode("utf-8")
         headers = {
             "Authorization": "Bearer upstream-private-value",
@@ -229,12 +232,20 @@ class ModelProxyTests(unittest.TestCase):
         request = Request(self.proxy_url + path, data=submitted, method="POST", headers=headers)
         try:
             with urlopen(request, timeout=10) as response:
-                return response.status, response.read(), response.headers
+                result = (response.status, response.read(), response.headers)
         except HTTPError as error:
             try:
-                return error.code, error.read(), error.headers
+                result = (error.code, error.read(), error.headers)
             finally:
                 error.close()
+        deadline = time.monotonic() + 1
+        while (
+            len(self.sink.by_type("model.completed")) + len(self.sink.by_type("model.failed"))
+            <= terminal_before
+            and time.monotonic() < deadline
+        ):
+            time.sleep(0.001)
+        return result
 
     def test_nonstreaming_parity_usage_and_content_exclusion(self) -> None:
         self.context()
