@@ -228,6 +228,7 @@ class TelemetryStoreTests(unittest.TestCase):
         self.assertEqual(metrics["exact_output_tokens"], 25)
         self.assertEqual(metrics["output_tokens_per_second"], 50)
         self.assertEqual(metrics["exact_call_count"], 1)
+        self.assertEqual(self.store.list_turns()[0]["output_tokens_per_second"], 50)
         fleet_model = self.store.summary()["fleet"]["model_metrics"]
         self.assertEqual(fleet_model["exact_call_count"], 1)
         self.assertEqual(fleet_model["exact_output_tokens"], 25)

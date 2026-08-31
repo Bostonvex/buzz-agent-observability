@@ -33,6 +33,21 @@ class DashboardSafetyTests(unittest.TestCase):
         self.assertIn("/api/v1/samples", script)
         self.assertIn("never assigned to an individual agent", page)
 
+    def test_recent_turns_are_sortable_and_expandable(self) -> None:
+        root = Path(__file__).resolve().parent.parent / "dashboard"
+        page = (root / "index.html").read_text(encoding="utf-8")
+        script = (root / "app.js").read_text(encoding="utf-8")
+        for field in (
+            "agent_display_name", "outcome", "started_at", "ended_at", "ttfa_ms",
+            "ttfvt_ms", "first_tool_ms", "duration_ms", "output_tokens_per_second",
+            "tool_count", "measurement_quality",
+        ):
+            self.assertIn(f'data-turn-sort="{field}"', page)
+        self.assertIn('turnSort: { key: "started_at", direction: "desc" }', script)
+        self.assertIn("turns.slice(0, 10)", script)
+        self.assertIn('id="toggle-turns"', page)
+        self.assertIn('aria-expanded="false"', page)
+
 
 if __name__ == "__main__":
     unittest.main()

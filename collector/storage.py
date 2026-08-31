@@ -502,7 +502,29 @@ class TelemetryStore:
                 """,
                 (*values, limit, max(0, offset)),
             ).fetchall()
-        return [dict(row) for row in rows]
+        turns = [dict(row) for row in rows]
+        model_events: dict[str, list[dict[str, Any]]] = {
+            str(turn["id"]): [] for turn in turns
+        }
+        if model_events:
+            placeholders = ",".join("?" for _ in model_events)
+            with self._lock:
+                event_rows = self._connection.execute(
+                    f"""
+                    SELECT turn_id, safe_payload_json FROM events
+                    WHERE turn_id IN ({placeholders}) AND event_type LIKE 'model.%'
+                    ORDER BY observed_at, rowid
+                    """,
+                    tuple(model_events),
+                ).fetchall()
+            for event_row in event_rows:
+                model_events[str(event_row["turn_id"])].append(
+                    json.loads(event_row["safe_payload_json"])
+                )
+        for turn in turns:
+            metrics = self._model_metrics(model_events[str(turn["id"])])
+            turn["output_tokens_per_second"] = metrics["output_tokens_per_second"]
+        return turns
 
     @staticmethod
     def _percentile(values: list[float], percentile: float) -> float | None:

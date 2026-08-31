@@ -74,10 +74,23 @@
         </div>
         <div class="table-shell">
           <table>
-            <thead><tr><th>Agent</th><th>Outcome</th><th>TTFA</th><th>Visible text</th><th>First tool</th><th>Duration</th><th>Tools</th><th>Quality</th></tr></thead>
-            <tbody id="turns-body"><tr><td colspan="8" class="empty">No turns stored in this window.</td></tr></tbody>
+            <thead><tr>
+              <th><button class="sort-button" type="button" data-turn-sort="agent_display_name">Agent</button></th>
+              <th><button class="sort-button" type="button" data-turn-sort="outcome">Outcome</button></th>
+              <th aria-sort="descending"><button class="sort-button" type="button" data-turn-sort="started_at">Start</button></th>
+              <th><button class="sort-button" type="button" data-turn-sort="ended_at">End</button></th>
+              <th><button class="sort-button" type="button" data-turn-sort="ttfa_ms">TTFA</button></th>
+              <th><button class="sort-button" type="button" data-turn-sort="ttfvt_ms">Visible text</button></th>
+              <th><button class="sort-button" type="button" data-turn-sort="first_tool_ms">First tool</button></th>
+              <th><button class="sort-button" type="button" data-turn-sort="duration_ms">Duration</button></th>
+              <th><button class="sort-button" type="button" data-turn-sort="output_tokens_per_second">Tok/s</button></th>
+              <th><button class="sort-button" type="button" data-turn-sort="tool_count">Tools</button></th>
+              <th><button class="sort-button" type="button" data-turn-sort="measurement_quality">Quality</button></th>
+            </tr></thead>
+            <tbody id="turns-body"><tr><td colspan="11" class="empty">No turns stored in this window.</td></tr></tbody>
           </table>
         </div>
+        <div class="turns-footer"><button id="toggle-turns" class="ghost-button" type="button" aria-expanded="false" hidden></button></div>
       </section>
 
       <section id="agent-view" class="detail-panel" hidden>

@@ -1,5 +1,8 @@
 const $ = (selector) => document.querySelector(selector);
-const state = { health: null, agents: [], turns: [], samples: [], summary: null, refreshTimer: null };
+const state = {
+  health: null, agents: [], turns: [], samples: [], summary: null, refreshTimer: null,
+  turnSort: { key: "started_at", direction: "desc" }, turnsExpanded: false,
+};
 
 function node(tag, text, className = "") {
   const element = document.createElement(tag);
@@ -22,6 +25,14 @@ function formatTime(value) {
   if (!value) return "—";
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? "—" : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+function formatDateTime(value) {
+  if (!value) return "—";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "—" : date.toLocaleString([], {
+    month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit",
+  });
 }
 
 function formatRate(value) {
@@ -227,12 +238,41 @@ function renderInfrastructure() {
 
 function renderTurns() {
   const body = $("#turns-body");
+  const toggle = $("#toggle-turns");
   body.replaceChildren();
+  for (const header of document.querySelectorAll("[data-turn-sort]")) {
+    const selected = header.dataset.turnSort === state.turnSort.key;
+    header.closest("th").setAttribute("aria-sort", selected
+      ? (state.turnSort.direction === "asc" ? "ascending" : "descending")
+      : "none");
+  }
   if (!state.turns.length) {
-    body.append(emptyRow(8, "No turns stored in this window."));
+    body.append(emptyRow(11, "No turns stored in this window."));
+    toggle.hidden = true;
     return;
   }
-  for (const turn of state.turns) {
+  const valueFor = (turn) => {
+    const value = turn[state.turnSort.key];
+    if (value === null || value === undefined || value === "") return null;
+    if (["started_at", "ended_at"].includes(state.turnSort.key)) {
+      const timestamp = new Date(value).getTime();
+      return Number.isNaN(timestamp) ? null : timestamp;
+    }
+    return typeof value === "string" ? value.toLocaleLowerCase() : value;
+  };
+  const turns = [...state.turns].sort((left, right) => {
+    const leftValue = valueFor(left);
+    const rightValue = valueFor(right);
+    if (leftValue === null && rightValue !== null) return 1;
+    if (rightValue === null && leftValue !== null) return -1;
+    let comparison = leftValue < rightValue ? -1 : leftValue > rightValue ? 1 : 0;
+    if (state.turnSort.direction === "desc") comparison *= -1;
+    if (comparison) return comparison;
+    const startComparison = String(right.started_at || "").localeCompare(String(left.started_at || ""));
+    return startComparison || String(left.id).localeCompare(String(right.id));
+  });
+  const visibleTurns = state.turnsExpanded ? turns : turns.slice(0, 10);
+  for (const turn of visibleTurns) {
     const row = document.createElement("tr");
     const button = node("button", turn.agent_display_name || "Unknown agent", "row-link");
     button.type = "button";
@@ -242,16 +282,24 @@ function renderTurns() {
     row.append(agentCell);
     const outcome = turn.outcome || "active";
     row.append(cell(outcome, `state state-${outcome}`));
+    row.append(cell(formatDateTime(turn.started_at), "muted"));
+    row.append(cell(formatDateTime(turn.ended_at), "muted"));
     row.append(cell(formatMs(turn.ttfa_ms)));
     row.append(cell(formatMs(turn.ttfvt_ms)));
     row.append(cell(formatMs(turn.first_tool_ms)));
     row.append(cell(formatMs(turn.duration_ms)));
+    row.append(cell(Number.isFinite(turn.output_tokens_per_second) ? turn.output_tokens_per_second.toFixed(1) : "—"));
     row.append(cell(turn.tool_count ?? "—"));
     const qualityCell = document.createElement("td");
     qualityCell.append(quality(turn.measurement_quality, turn.duration_ms === null));
     row.append(qualityCell);
     body.append(row);
   }
+  toggle.hidden = turns.length <= 10;
+  toggle.setAttribute("aria-expanded", String(state.turnsExpanded));
+  toggle.textContent = state.turnsExpanded
+    ? "Show newest 10"
+    : `Show all ${turns.length} turns`;
 }
 
 function metricCard(label, value, badge = null) {
@@ -419,13 +467,34 @@ function connectLive() {
 document.addEventListener("click", (event) => {
   const agentButton = event.target.closest("[data-agent-id]");
   const turnButton = event.target.closest("[data-turn-id]");
+  const sortButton = event.target.closest("[data-turn-sort]");
   if (agentButton) void openAgent(agentButton.dataset.agentId);
   if (turnButton) void openTurn(turnButton.dataset.turnId);
+  if (sortButton) {
+    const key = sortButton.dataset.turnSort;
+    if (state.turnSort.key === key) {
+      state.turnSort.direction = state.turnSort.direction === "asc" ? "desc" : "asc";
+    } else {
+      state.turnSort = {
+        key,
+        direction: ["agent_display_name", "outcome", "measurement_quality"].includes(key) ? "asc" : "desc",
+      };
+    }
+    renderTurns();
+  }
 });
 
-for (const select of document.querySelectorAll(".filters select")) select.addEventListener("change", refresh);
+$("#toggle-turns").addEventListener("click", () => {
+  state.turnsExpanded = !state.turnsExpanded;
+  renderTurns();
+});
+for (const select of document.querySelectorAll(".filters select")) select.addEventListener("change", () => {
+  state.turnsExpanded = false;
+  void refresh();
+});
 $("#clear-filters").addEventListener("click", () => {
   for (const select of document.querySelectorAll(".filters select")) select.selectedIndex = select.id === "filter-time" ? 1 : 0;
+  state.turnsExpanded = false;
   void refresh();
 });
 for (const button of document.querySelectorAll(".close-detail")) button.addEventListener("click", () => {
