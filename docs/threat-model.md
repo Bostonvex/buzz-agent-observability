@@ -1,4 +1,4 @@
-# Phase 1 threat model
+# Threat model
 
 ## Assets and trust boundaries
 
@@ -6,7 +6,7 @@ The collector protects local telemetry integrity, the ingest token, agent identi
 
 ## Threats and current controls
 
-| Threat | Phase 1 control |
+| Threat | Current control |
 |---|---|
 | LAN exposure or drive-by access | Literal `127.0.0.1` bind is enforced in code; non-loopback startup fails. |
 | Unauthorized event injection | Random local bearer token stored in a non-symlink regular file with mode `0600`. |
@@ -16,8 +16,9 @@ The collector protects local telemetry integrity, the ingest token, agent identi
 | Persistent browser script injection | Dashboard renders metadata with `textContent`; responses set a restrictive Content Security Policy. |
 | SQLite corruption or lock contention | Transactions, busy timeout, WAL mode, and a process-local lock. |
 | Unbounded history | Raw events are deleted oldest-first after seven days by periodic retention maintenance. |
-| SSRF or command execution | Phase 1 accepts no endpoint URL and contains no model, SSH, or shell execution route. |
-| Telemetry blocks ACP forwarding | Not applicable until Phase 2; the proposed observer API requires a bounded queue, short deadlines, and no-throw behavior. |
+| Model-proxy SSRF or credential disclosure | The optional proxy accepts one startup-configured upstream, fixes its allowed request paths, strips telemetry headers, and never logs/stores model headers or bodies. |
+| Forged model correlation | The proxy context endpoint requires the private collector token and accepts only the normalized identifier shape. Concurrent active turns are marked ambiguous unless explicitly selected. |
+| Telemetry blocks ACP or model forwarding | Observer and proxy delivery use bounded queues, short deadlines, no-throw entry points, and fail-open collector handling. |
 
 ## Known limits
 

@@ -9,6 +9,13 @@ It does not collect or persist:
 - headers, cookies, API keys, tokens, private keys, authentication tags, or environment dumps;
 - arbitrary producer-defined fields or attributes.
 
+The optional model proxy streams request bodies without parsing them. Its
+bounded response inspector retains at most 8 MiB in memory long enough to find
+generated-delta presence and documented integer usage counters, then discards
+the buffer. It never puts model content or HTTP headers in an event. The proxy
+accepts one configured upstream origin and strips all private telemetry
+correlation headers before forwarding.
+
 The collector validates before writing to SQLite. An event containing an unknown field, unknown attribute, control characters, or a common secret-shaped string is rejected as a whole. API validation errors identify only the field path and error category; they never echo the submitted value.
 
 Friendly agent names remain separate from stable privacy-preserving IDs. Future ACP observers must never use owner authorization metadata or private key material for identity. If a safe identity cannot be resolved, the observer should emit an unknown/session-derived identity and expose the mapping issue diagnostically.

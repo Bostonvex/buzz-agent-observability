@@ -163,6 +163,60 @@ class TelemetryStoreTests(unittest.TestCase):
         self.assertEqual([group["value"] for group in groups], ["deepseek", "qwen-code"])
         self.assertEqual([group["metrics"]["duration_ms"]["p50"] for group in groups], [800, 1200])
 
+    def test_exact_model_metrics_and_cross_process_timeline_are_visible(self) -> None:
+        model_events = [
+            event("turn.started", observed_at="2026-08-31T12:00:00Z"),
+            event(
+                "model.request_started",
+                observed_at="2026-08-31T12:00:00.100Z",
+                attributes={"correlation": "exact", "measurement_quality": "exact"},
+            ),
+            event(
+                "model.first_token",
+                observed_at="2026-08-31T12:00:00.250Z",
+                attributes={
+                    "elapsed_ms": 150,
+                    "correlation": "exact",
+                    "measurement_quality": "exact",
+                },
+            ),
+            event(
+                "model.completed",
+                observed_at="2026-08-31T12:00:00.750Z",
+                attributes={
+                    "duration_ms": 650,
+                    "connection_ms": 2,
+                    "first_byte_ms": 20,
+                    "decode_ms": 500,
+                    "http_status": 200,
+                    "input_tokens": 10,
+                    "output_tokens": 25,
+                    "correlation": "exact",
+                    "measurement_quality": "exact",
+                },
+            ),
+            event(
+                "turn.completed",
+                observed_at="2026-08-31T12:00:01Z",
+                attributes={"duration_ms": 1000, "outcome": "completed"},
+            ),
+        ]
+        for item in model_events:
+            item["monotonic_offset_ms"] = 1 if item["event_type"].startswith("model.") else 99_999
+        self.store.insert_events([validate_event(item) for item in model_events])
+
+        detail = self.store.turn_detail("turn-alpha")
+        assert detail is not None
+        metrics = detail["model_metrics"]
+        self.assertEqual(metrics["call_count"], 1)
+        self.assertEqual(metrics["ttft_ms"]["p50"], 150)
+        self.assertEqual(metrics["exact_output_tokens"], 25)
+        self.assertEqual(metrics["output_tokens_per_second"], 50)
+        model_completed = next(
+            item for item in detail["timeline"] if item["event_type"] == "model.completed"
+        )
+        self.assertEqual(model_completed["relative_ms"], 750)
+
 
 if __name__ == "__main__":
     unittest.main()

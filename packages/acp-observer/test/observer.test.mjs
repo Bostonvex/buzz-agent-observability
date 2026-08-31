@@ -222,6 +222,39 @@ test("transport failures are isolated from the protocol path", async () => {
   assert.ok(observer.diagnostics().observerErrors > 0);
 });
 
+test("observer publishes normalized model-proxy context around an active turn", () => {
+  const starts = [];
+  const ends = [];
+  const contextSink = {
+    start: (context) => starts.push(context),
+    end: (contextId) => ends.push(contextId),
+  };
+  const { clock, observer } = setup({ contextSink });
+  establishSession(observer, clock, [
+    { name: "BUZZ_ACP_DISPLAY_NAME", value: "Context agent" },
+    { name: "PRIVATE_VALUE", value: "must-not-leave" },
+  ]);
+  clock.set(100);
+  observer.observeClientMessage({
+    id: 22,
+    method: "session/prompt",
+    params: { sessionId: "raw-session-secret", prompt: [{ type: "text", text: "private" }] },
+  });
+
+  assert.equal(starts.length, 1);
+  assert.equal(starts[0].display_name, "Context agent");
+  assert.match(starts[0].agent_id, /^h_/u);
+  assert.match(starts[0].session_id, /^h_/u);
+  assert.equal(starts[0].turn_id, starts[0].context_id);
+  assert.equal(JSON.stringify(starts).includes("raw-session-secret"), false);
+  assert.equal(JSON.stringify(starts).includes("must-not-leave"), false);
+  assert.equal(JSON.stringify(starts).includes("private"), false);
+
+  clock.set(200);
+  observer.observeServerMessage({ id: 22, result: { stopReason: "end_turn" } });
+  assert.deepEqual(ends, [starts[0].context_id]);
+});
+
 test("disabled observer is a complete no-op", async () => {
   const observer = createAcpObserver({ enabled: false });
   observer.observeClientMessage({});

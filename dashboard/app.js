@@ -241,10 +241,11 @@ function renderWaterfall(events, durationMs) {
     return;
   }
   const origin = events.find((event) => event.event_type === "turn.started")?.monotonic_offset_ms ?? events[0].monotonic_offset_ms;
-  const observedMaximum = Math.max(...events.map((event) => event.monotonic_offset_ms - origin), 1);
+  const eventOffset = (event) => Number.isFinite(event.relative_ms) ? event.relative_ms : event.monotonic_offset_ms - origin;
+  const observedMaximum = Math.max(...events.map(eventOffset), 1);
   const total = Math.max(durationMs || 0, observedMaximum, 1);
   for (const event of events) {
-    const offset = Math.max(0, event.monotonic_offset_ms - origin);
+    const offset = Math.max(0, eventOffset(event));
     const duration = Number(event.attributes.duration_ms || 0);
     const start = Math.max(0, offset - duration);
     const row = node("div", null, "waterfall-row");
@@ -263,6 +264,7 @@ function renderWaterfall(events, durationMs) {
 async function openTurn(turnId) {
   const detail = await fetchJson(`/api/v1/turns/${encodeURIComponent(turnId)}`);
   const turn = detail.turn;
+  const model = detail.model_metrics || {};
   $("#turn-title").textContent = `${turn.agent_display_name || "Unknown agent"} · turn waterfall`;
   $("#turn-subtitle").textContent = `${turn.harness || "Unknown harness"} / ${turn.model || "Unknown model"} · ${formatTime(turn.started_at)} · ${turn.outcome || "active"}`;
   $("#turn-facts").replaceChildren(
@@ -271,6 +273,9 @@ async function openTurn(turnId) {
     metricCard("First tool", formatMs(turn.first_tool_ms), turn.first_tool_ms === null ? "unavailable" : turn.measurement_quality || "exact"),
     metricCard("Total", formatMs(turn.duration_ms), turn.duration_ms === null ? "unavailable" : turn.measurement_quality || "exact"),
     metricCard("Longest stall", formatMs(turn.max_stall_ms), turn.max_stall_ms === null ? "unavailable" : turn.measurement_quality || "exact"),
+    metricCard("Model calls", model.call_count ?? 0, model.call_count ? "exact" : "unavailable"),
+    metricCard("Model p50 TTFT", formatMs(model.ttft_ms?.p50), model.ttft_ms?.count ? "exact" : "unavailable"),
+    metricCard("Model output tok/s", model.output_tokens_per_second === null || model.output_tokens_per_second === undefined ? "—" : model.output_tokens_per_second.toFixed(1), model.output_tokens_per_second === null || model.output_tokens_per_second === undefined ? "unavailable" : "exact"),
   );
   renderWaterfall(detail.timeline, turn.duration_ms);
   const shared = $("#shared-context");

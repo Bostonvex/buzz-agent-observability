@@ -110,6 +110,8 @@ EVENT_ATTRIBUTES = {
     "model.completed": frozenset(
         {
             "duration_ms",
+            "connection_ms",
+            "first_byte_ms",
             "decode_ms",
             "http_status",
             "input_tokens",
@@ -119,7 +121,17 @@ EVENT_ATTRIBUTES = {
             "correlation",
         }
     ),
-    "model.failed": frozenset({"duration_ms", "http_status", "error_category", "error_code", "correlation"}),
+    "model.failed": frozenset(
+        {
+            "duration_ms",
+            "connection_ms",
+            "first_byte_ms",
+            "http_status",
+            "error_category",
+            "error_code",
+            "correlation",
+        }
+    ),
     "collector.dropped_events": frozenset({"dropped_count", "queue_depth"}),
     "protocol.anomaly": frozenset({"anomaly_kind", "line_bytes"}),
     "server.sample": frozenset({"metric_name", "value", "unit"}),
@@ -135,6 +147,8 @@ NUMERIC_ATTRIBUTES = frozenset(
         "gap_ms",
         "threshold_ms",
         "duration_ms",
+        "connection_ms",
+        "first_byte_ms",
         "decode_ms",
         "ttfa_ms",
         "ttfvt_ms",

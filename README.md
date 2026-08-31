@@ -64,6 +64,15 @@ BUZZ_TELEMETRY_ENDPOINT_ID=local-model-primary
 
 See the [observer package README](packages/acp-observer/README.md) for its API. No content-capture option exists.
 
+## Optional model proxy
+
+`buzz-model-proxy` is a loopback-only, fixed-upstream OpenAI-compatible sidecar
+for exact model connection, first-byte, streaming TTFT, decode, duration, and
+usage telemetry. It streams request bodies without parsing them, preserves
+response bytes and errors, and can correlate with the active ACP turn through
+the shared observer. It remains entirely optional. See the
+[model proxy guide](docs/model-proxy.md).
+
 ## Project direction
 
 DeepSeek is the first harness integration after the shared observer. See the [roadmap](docs/roadmap.md) and [Phase 2 interface](docs/phase-2-interface.md).

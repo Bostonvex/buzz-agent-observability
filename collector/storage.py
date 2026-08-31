@@ -540,15 +540,19 @@ class TelemetryStore:
                 (row["started_at"], terminal),
             ).fetchall()
 
+        turn_origin = datetime.fromisoformat(row["started_at"].replace("Z", "+00:00"))
+
         def timeline(items: Iterable[sqlite3.Row], *, shared: bool) -> list[dict[str, Any]]:
             result = []
             for item in items:
                 event = json.loads(item["safe_payload_json"])
+                event_time = datetime.fromisoformat(item["observed_at"].replace("Z", "+00:00"))
                 result.append(
                     {
                         "event_type": item["event_type"],
                         "observed_at": item["observed_at"],
                         "monotonic_offset_ms": event["monotonic_offset_ms"],
+                        "relative_ms": max(0.0, (event_time - turn_origin).total_seconds() * 1000),
                         "span_id": event["span_id"],
                         "parent_span_id": event["parent_span_id"],
                         "attributes": event["attributes"],
@@ -557,10 +561,66 @@ class TelemetryStore:
                 )
             return result
 
+        model_events = [
+            json.loads(item["safe_payload_json"])
+            for item in event_rows
+            if item["event_type"].startswith("model.")
+        ]
+        terminal_model_events = [
+            event
+            for event in model_events
+            if event["event_type"] in {"model.completed", "model.failed"}
+        ]
+        ttft_values = [
+            float(event["attributes"]["elapsed_ms"])
+            for event in model_events
+            if event["event_type"] == "model.first_token"
+            and "elapsed_ms" in event["attributes"]
+        ]
+        exact_decode_events = [
+            event
+            for event in terminal_model_events
+            if event["event_type"] == "model.completed"
+            and event["attributes"].get("correlation") == "exact"
+            and isinstance(event["attributes"].get("decode_ms"), (int, float))
+            and event["attributes"].get("decode_ms", 0) > 0
+            and isinstance(event["attributes"].get("output_tokens"), int)
+        ]
+        decode_ms = sum(float(event["attributes"]["decode_ms"]) for event in exact_decode_events)
+        output_tokens = sum(int(event["attributes"]["output_tokens"]) for event in exact_decode_events)
+        correlations: dict[str, int] = {}
+        for event in terminal_model_events:
+            correlation = str(event["attributes"].get("correlation", "unavailable"))
+            correlations[correlation] = correlations.get(correlation, 0) + 1
+
+        model_metrics = {
+            "call_count": sum(
+                event["event_type"] == "model.request_started" for event in model_events
+            ),
+            "completed_count": sum(
+                event["event_type"] == "model.completed" for event in model_events
+            ),
+            "failed_count": sum(event["event_type"] == "model.failed" for event in model_events),
+            "ttft_ms": {
+                "count": len(ttft_values),
+                "p50": self._percentile(ttft_values, 0.50),
+                "p95": self._percentile(ttft_values, 0.95),
+                "minimum": min(ttft_values) if ttft_values else None,
+                "maximum": max(ttft_values) if ttft_values else None,
+            },
+            "exact_output_tokens": output_tokens,
+            "exact_decode_ms": decode_ms or None,
+            "output_tokens_per_second": output_tokens / (decode_ms / 1000)
+            if decode_ms > 0
+            else None,
+            "correlation_counts": correlations,
+        }
+
         return {
             "turn": dict(row),
             "timeline": timeline(event_rows, shared=False),
             "shared_context": timeline(shared_rows, shared=True),
+            "model_metrics": model_metrics,
         }
 
     def purge_expired_raw(self, *, retention_days: int = 7, now: datetime | None = None) -> int:

@@ -1,0 +1,2 @@
+"""Model proxy tests."""
+

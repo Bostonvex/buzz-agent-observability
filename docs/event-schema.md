@@ -16,4 +16,15 @@ Required envelope fields:
 
 Timing values carry `measurement_quality` when relevant: `exact`, `derived`, `estimated`, or `unavailable`. TTFA (`turn.first_activity`), TTFVT (`turn.first_visible_text`), and model TTFT (`model.first_token`) are distinct measurements and must not be relabeled.
 
+Model events use one span per HTTP call. `model.completed` may carry exact
+`connection_ms`, `first_byte_ms`, `decode_ms`, HTTP status, and documented
+usage counters. `model.first_token.elapsed_ms` is measured from request start
+to the first non-empty generated streaming delta. Non-streaming calls omit TTFT
+and decode timing because a complete response cannot expose those boundaries.
+`correlation` is always `exact`, `ambiguous`, or `unavailable`.
+
+`monotonic_offset_ms` is comparable only within one producer process. The
+dashboard aligns ACP and proxy events from different processes using
+`observed_at`; durations remain based on each producer's monotonic clock.
+
 The contract intentionally has no generic tags or arbitrary metadata map. Schema evolution adds specific reviewed attributes and increments the schema version when compatibility requires it.

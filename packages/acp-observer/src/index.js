@@ -1,7 +1,13 @@
 import { lstatSync, readFileSync } from "node:fs";
 
 import { createAcpObserver } from "./observer.js";
+import { createModelProxyContextSink } from "./context.js";
 
+export {
+  createModelProxyContextSink,
+  ModelProxyContextSink,
+  normalizeModelProxyContextUrl,
+} from "./context.js";
 export { hmacIdentifier, identityMetadataFromSession, resolveIdentity, safeLabel } from "./identity.js";
 export { createAcpObserver } from "./observer.js";
 export { createTelemetryTransport, normalizeCollectorUrl, TelemetryTransport } from "./transport.js";
@@ -26,6 +32,18 @@ export function createAcpObserverFromEnv(overrides = {}, environment = process.e
   try {
     const token = readPrivateFile(environment.BUZZ_TELEMETRY_TOKEN_FILE, 32);
     const identitySalt = readPrivateFile(environment.BUZZ_TELEMETRY_IDENTITY_SALT_FILE, 16);
+    let contextSink;
+    if (environment.BUZZ_MODEL_PROXY_CONTEXT_URL) {
+      try {
+        contextSink = createModelProxyContextSink({
+          contextUrl: environment.BUZZ_MODEL_PROXY_CONTEXT_URL,
+          token,
+          timeoutMs: Number(environment.BUZZ_MODEL_PROXY_CONTEXT_TIMEOUT_MS ?? 100),
+        });
+      } catch {
+        contextSink = undefined;
+      }
+    }
     return createAcpObserver({
       enabled: true,
       harness: overrides.harness,
@@ -38,6 +56,7 @@ export function createAcpObserverFromEnv(overrides = {}, environment = process.e
       agentDisplayName:
         environment.BUZZ_ACP_DISPLAY_NAME ?? environment.BUZZ_GIT_ORIGIN_AGENT_NAME,
       identitySalt,
+      contextSink,
       transportOptions: {
         collectorUrl:
           environment.BUZZ_TELEMETRY_URL ?? "http://127.0.0.1:7900/api/v1/events",

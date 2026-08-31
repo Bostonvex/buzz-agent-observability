@@ -21,6 +21,9 @@ class DashboardSafetyTests(unittest.TestCase):
         self.assertIn("EventSource", script)
         self.assertIn("Collector disconnected", script)
         self.assertIn("URLSearchParams", script)
+        self.assertIn("Model p50 TTFT", script)
+        self.assertIn("Model output tok/s", script)
+        self.assertIn("relative_ms", script)
 
 
 if __name__ == "__main__":

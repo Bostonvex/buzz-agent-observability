@@ -80,6 +80,8 @@
         "gap_ms": { "$ref": "#/$defs/nonNegativeNumber" },
         "threshold_ms": { "$ref": "#/$defs/nonNegativeNumber" },
         "duration_ms": { "$ref": "#/$defs/nonNegativeNumber" },
+        "connection_ms": { "$ref": "#/$defs/nonNegativeNumber" },
+        "first_byte_ms": { "$ref": "#/$defs/nonNegativeNumber" },
         "decode_ms": { "$ref": "#/$defs/nonNegativeNumber" },
         "ttfa_ms": { "$ref": "#/$defs/nonNegativeNumber" },
         "ttfvt_ms": { "$ref": "#/$defs/nonNegativeNumber" },

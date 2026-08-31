@@ -97,6 +97,7 @@ class AcpObserver {
     this.turns = new Map();
     this.observerErrors = 0;
     this.processExited = false;
+    this.contextSink = config.contextSink;
     this.processStartedAt = this.clock();
     this.processStartedEmitted = false;
 
@@ -260,6 +261,20 @@ class AcpObserver {
     session.activeTurnKeys.add(key);
     session.currentTurnKey = key;
     this.#emit("turn.started", this.#context(session, turn), {}, now);
+    try {
+      this.contextSink?.start?.({
+        context_id: turn.turnId,
+        agent_id: session.agent.id,
+        display_name: session.agent.display_name,
+        harness: this.harness,
+        model: this.model,
+        endpoint_id: this.endpointId,
+        session_id: session.hashedSessionId,
+        turn_id: turn.turnId,
+      });
+    } catch {
+      this.observerErrors += 1;
+    }
   }
 
   #rememberRequest(key, pending) {
@@ -399,6 +414,11 @@ class AcpObserver {
     }
     if (eventType === "turn.completed") attributes.outcome = "completed";
     this.#emit(eventType, this.#context(turn.session, turn), attributes, now);
+    try {
+      this.contextSink?.end?.(turn.turnId);
+    } catch {
+      this.observerErrors += 1;
+    }
     turn.session.activeTurnKeys.delete(turn.key);
     if (turn.session.currentTurnKey === turn.key) turn.session.currentTurnKey = null;
     this.turns.delete(turn.key);
@@ -587,7 +607,11 @@ class AcpObserver {
 
   async flush(options = {}) {
     try {
-      return await this.transport.flush(options);
+      const [transport] = await Promise.all([
+        this.transport.flush(options),
+        this.contextSink?.flush?.(options),
+      ]);
+      return transport;
     } catch {
       this.observerErrors += 1;
       return this.diagnostics();
@@ -596,7 +620,7 @@ class AcpObserver {
 
   async close(options = {}) {
     try {
-      await this.transport.close(options);
+      await Promise.all([this.transport.close(options), this.contextSink?.close?.(options)]);
     } catch {
       this.observerErrors += 1;
     }
