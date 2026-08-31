@@ -15,6 +15,9 @@ def event(
     turn_id: str | None = "turn-alpha",
     attributes: dict[str, Any] | None = None,
     observed_at: str | None = None,
+    harness: str | None = "deepseek",
+    model: str | None = "example-model",
+    endpoint_id: str | None = "local-example",
 ) -> dict[str, Any]:
     return {
         "schema_version": 1,
@@ -25,9 +28,9 @@ def event(
         "monotonic_offset_ms": 10.5,
         "producer": {"name": "test-producer", "version": "0.1.0", "instance_id": "test-instance"},
         "agent": {"id": agent_id, "display_name": display_name},
-        "harness": "deepseek",
-        "model": "example-model",
-        "endpoint_id": "local-example",
+        "harness": harness,
+        "model": model,
+        "endpoint_id": endpoint_id,
         "session_id": "hashed-session-alpha",
         "turn_id": turn_id,
         "span_id": None,

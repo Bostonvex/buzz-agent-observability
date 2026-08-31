@@ -135,6 +135,34 @@ class TelemetryStoreTests(unittest.TestCase):
         self.assertEqual(len(detail["timeline"]), 5)
         self.assertEqual(detail["timeline"][0]["event_type"], "turn.started")
 
+    def test_deepseek_and_qwen_are_comparable_in_one_summary(self) -> None:
+        self.store.insert_events(
+            [
+                validate_event(
+                    event(
+                        "turn.completed",
+                        turn_id="turn-deepseek",
+                        observed_at="2026-08-31T12:00:01Z",
+                        attributes={"duration_ms": 800, "measurement_quality": "exact", "outcome": "completed"},
+                    )
+                ),
+                validate_event(
+                    event(
+                        "turn.completed",
+                        agent_id="agent-qwen",
+                        display_name="Qwen agent",
+                        turn_id="turn-qwen",
+                        harness="qwen-code",
+                        observed_at="2026-08-31T12:00:02Z",
+                        attributes={"duration_ms": 1200, "measurement_quality": "exact", "outcome": "completed"},
+                    )
+                ),
+            ]
+        )
+        groups = self.store.summary()["groups"]["harnesses"]
+        self.assertEqual([group["value"] for group in groups], ["deepseek", "qwen-code"])
+        self.assertEqual([group["metrics"]["duration_ms"]["p50"] for group in groups], [800, 1200])
+
 
 if __name__ == "__main__":
     unittest.main()
