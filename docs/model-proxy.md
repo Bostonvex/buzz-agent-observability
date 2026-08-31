@@ -115,8 +115,10 @@ shown only when both output tokens and decode time are exact. Per-turn
 throughput is available in the turn detail. **Fleet output tok/s** is a weighted
 aggregate: total exact output tokens divided by total exact decode seconds
 across the current dashboard filters. It is intentionally not an average of
-per-call rates. The card also shows how many exactly correlated calls
-contributed; ambiguous and unavailable correlations are excluded.
+per-call rates. The card shows both the number of exactly measured calls that
+contributed and how many of those calls were attributed to an ACP turn.
+Unattributed calls contribute to the fleet rate but never appear as agents or
+in per-agent metrics.
 
 The dashboard aligns cross-process model events by wall-clock timestamps;
 process-local monotonic clocks are used only for duration calculations.

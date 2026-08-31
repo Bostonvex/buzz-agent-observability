@@ -9,9 +9,10 @@
   non-streaming responses while recording connection, first-byte,
   first-generated-chunk, completion, and usage metadata. Anthropic Messages
   includes cumulative streaming usage and HTTP-200 SSE error recognition.
-- The dashboard includes weighted fleet output tokens/second across exactly
-  correlated calls in the current filter scope, with contributing-call
-  coverage shown beside the metric.
+- The dashboard includes weighted fleet output tokens/second across all exactly
+  measured calls in the current filter scope, with measured-call and
+  ACP-attribution coverage shown beside the metric. Unattributed model traffic
+  does not create pseudo-agent rows.
 - Synthetic loopback proxy overhead measured 0.206 ms added p50 across 50
   non-streaming requests, below the 5 ms release threshold. See the
   [model proxy guide](model-proxy.md) for method and limitations.

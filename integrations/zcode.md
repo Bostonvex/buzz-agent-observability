@@ -10,6 +10,17 @@ Configuration uses the same shared variables documented in the
 Missing or unsafe private files, invalid configuration, observer exceptions,
 timeouts, and collector outages all fail open.
 
+Because ZCode sessions do not normally carry Buzz's agent-name metadata, set a
+stable presentation identity in its custom-harness manifest:
+
+```text
+BUZZ_TELEMETRY_AGENT_ID=zcode
+BUZZ_ACP_DISPLAY_NAME=ZCode
+```
+
+The agent identifier is HMAC-derived before emission. These values prevent one
+anonymous agent row per session without exposing credentials or session IDs.
+
 For exact Anthropic Messages TTFT, token counts, decode time, and output tokens
 per second, install the optional proxy and add:
 

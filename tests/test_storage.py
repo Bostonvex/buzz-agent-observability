@@ -243,7 +243,7 @@ class TelemetryStoreTests(unittest.TestCase):
         for turn_id, output_tokens, decode_ms, correlation in (
             ("turn-one", 20, 500, "exact"),
             ("turn-two", 30, 1500, "exact"),
-            ("turn-three", 999, 1, "ambiguous"),
+            ("turn-three", 10, 500, "ambiguous"),
         ):
             events.extend(
                 [
@@ -273,10 +273,55 @@ class TelemetryStoreTests(unittest.TestCase):
         self.store.insert_events([validate_event(item) for item in events])
         metrics = self.store.summary()["fleet"]["model_metrics"]
         self.assertEqual(metrics["call_count"], 3)
-        self.assertEqual(metrics["exact_call_count"], 2)
-        self.assertEqual(metrics["exact_output_tokens"], 50)
-        self.assertEqual(metrics["exact_decode_ms"], 2000)
-        self.assertEqual(metrics["output_tokens_per_second"], 25)
+        self.assertEqual(metrics["exact_call_count"], 3)
+        self.assertEqual(metrics["attributed_exact_call_count"], 2)
+        self.assertEqual(metrics["exact_output_tokens"], 60)
+        self.assertEqual(metrics["exact_decode_ms"], 2500)
+        self.assertEqual(metrics["output_tokens_per_second"], 24)
+
+    def test_unattributed_model_traffic_is_fleet_only(self) -> None:
+        model_events = [
+            event(
+                "model.request_started",
+                agent_id="proxy-only",
+                display_name="Unattributed model proxy",
+                turn_id=None,
+                attributes={"correlation": "unavailable", "measurement_quality": "exact"},
+            ),
+            event(
+                "model.completed",
+                agent_id="proxy-only",
+                display_name="Unattributed model proxy",
+                turn_id=None,
+                attributes={
+                    "duration_ms": 1200,
+                    "decode_ms": 1000,
+                    "http_status": 200,
+                    "output_tokens": 40,
+                    "correlation": "unavailable",
+                    "measurement_quality": "exact",
+                },
+            ),
+        ]
+        self.store.insert_events([validate_event(item) for item in model_events])
+
+        self.assertEqual(self.store.list_agents(), [])
+        metrics = self.store.summary()["fleet"]["model_metrics"]
+        self.assertEqual(metrics["call_count"], 1)
+        self.assertEqual(metrics["exact_call_count"], 1)
+        self.assertEqual(metrics["attributed_exact_call_count"], 0)
+        self.assertEqual(metrics["output_tokens_per_second"], 40)
+
+    def test_unknown_harness_identity_gets_a_stable_presentation_label(self) -> None:
+        submitted = validate_event(
+            event(
+                agent_id="unknown-zcode",
+                display_name="Unknown agent h_example",
+                harness="zcode",
+            )
+        )
+        self.store.insert_events([submitted])
+        self.assertEqual(self.store.list_agents()[0]["display_name"], "ZCode")
 
 
 if __name__ == "__main__":

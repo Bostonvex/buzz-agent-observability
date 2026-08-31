@@ -109,7 +109,8 @@ function renderSummary() {
   $("#fleet-output-tps-quality").textContent = outputTpsQuality;
   $("#fleet-output-tps-quality").className = `quality ${outputTpsQuality}`;
   const exactCalls = model.exact_call_count || 0;
-  $("#fleet-output-tps-coverage").textContent = `${exactCalls} exact call${exactCalls === 1 ? "" : "s"}`;
+  const attributedCalls = model.attributed_exact_call_count || 0;
+  $("#fleet-output-tps-coverage").textContent = `${exactCalls} measured call${exactCalls === 1 ? "" : "s"} · ${attributedCalls} attributed`;
   $("#event-count").textContent = state.health.events;
   $("#journal-mode").textContent = `SQLite ${state.health.journal_mode.toUpperCase()}`;
   $("#turn-outcomes").textContent = `${fleet.outcomes.failed || 0} failed · ${fleet.outcomes.cancelled || 0} cancelled`;

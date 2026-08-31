@@ -122,6 +122,7 @@ class TelemetryStore:
             self._connection.execute("PRAGMA synchronous = NORMAL")
             self._connection.executescript(MIGRATION)
             self._migrate_turn_columns()
+            self._repair_materialized_agents()
             self._connection.execute(
                 "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (1, ?)",
                 (_utc_now(),),
@@ -131,6 +132,42 @@ class TelemetryStore:
                 (_utc_now(),),
             )
             self._connection.commit()
+
+    @staticmethod
+    def _agent_display_name(display_name: str, harness: str | None) -> str:
+        if not display_name.startswith("Unknown agent"):
+            return display_name
+        return {
+            "deepseek": "DeepSeek",
+            "qwen-code": "Qwen Code",
+            "zcode": "ZCode",
+        }.get(harness or "", "Agent")
+
+    def _repair_materialized_agents(self) -> None:
+        """Remove proxy-only pseudo-agents and normalize legacy fallback labels."""
+        self._connection.execute(
+            """
+            DELETE FROM agents
+            WHERE NOT EXISTS (SELECT 1 FROM turns WHERE turns.agent_id = agents.id)
+              AND NOT EXISTS (
+                  SELECT 1 FROM events
+                  WHERE events.agent_id = agents.id
+                    AND events.event_type NOT LIKE 'model.%'
+              )
+            """
+        )
+        for harness, display_name in (
+            ("deepseek", "DeepSeek"),
+            ("qwen-code", "Qwen Code"),
+            ("zcode", "ZCode"),
+        ):
+            self._connection.execute(
+                """
+                UPDATE agents SET display_name = ?
+                WHERE harness = ? AND display_name LIKE 'Unknown agent%'
+                """,
+                (display_name, harness),
+            )
 
     def _migrate_turn_columns(self) -> None:
         existing = {
@@ -187,7 +224,9 @@ class TelemetryStore:
             """,
             (
                 event["agent"]["id"],
-                event["agent"]["display_name"],
+                self._agent_display_name(
+                    event["agent"]["display_name"], event["harness"]
+                ),
                 event["observed_at"],
                 event["observed_at"],
                 event["harness"],
@@ -295,7 +334,15 @@ class TelemetryStore:
                 )
                 if cursor.rowcount:
                     inserted += 1
-                    if event["event_type"] not in {"server.sample", "hardware.sample"}:
+                    correlation = event["attributes"].get("correlation")
+                    unattributed_model = (
+                        event["event_type"].startswith("model.")
+                        and correlation != "exact"
+                    )
+                    if (
+                        event["event_type"] not in {"server.sample", "hardware.sample"}
+                        and not unattributed_model
+                    ):
                         self._upsert_agent(event)
                         self._upsert_turn(event)
         return inserted
@@ -525,7 +572,7 @@ class TelemetryStore:
             event
             for event in terminal_events
             if event["event_type"] == "model.completed"
-            and event["attributes"].get("correlation") == "exact"
+            and event["attributes"].get("measurement_quality") == "exact"
             and isinstance(event["attributes"].get("decode_ms"), (int, float))
             and event["attributes"].get("decode_ms", 0) > 0
             and isinstance(event["attributes"].get("output_tokens"), int)
@@ -551,6 +598,10 @@ class TelemetryStore:
                 event["event_type"] == "model.failed" for event in model_events
             ),
             "exact_call_count": len(exact_decode_events),
+            "attributed_exact_call_count": sum(
+                event["attributes"].get("correlation") == "exact"
+                for event in exact_decode_events
+            ),
             "ttft_ms": {
                 "count": len(ttft_values),
                 "p50": cls._percentile(ttft_values, 0.50),
@@ -580,6 +631,57 @@ class TelemetryStore:
                 turn_ids,
             ).fetchall()
         return [json.loads(row["safe_payload_json"]) for row in rows]
+
+    def _filtered_model_events(
+        self,
+        *,
+        since: str | None = None,
+        until: str | None = None,
+        agent_id: str | None = None,
+        harness: str | None = None,
+        model: str | None = None,
+        endpoint_id: str | None = None,
+        outcome: str | None = None,
+        limit: int = 20_000,
+    ) -> tuple[list[dict[str, Any]], bool]:
+        clauses = ["e.event_type LIKE 'model.%'"]
+        values: list[Any] = []
+        for column, value in (
+            ("agent_id", agent_id),
+            ("harness", harness),
+            ("model", model),
+            ("endpoint_id", endpoint_id),
+        ):
+            if value is not None:
+                clauses.append(f"e.{column} = ?")
+                values.append(value)
+        if since is not None:
+            clauses.append("e.observed_at >= ?")
+            values.append(since)
+        if until is not None:
+            clauses.append("e.observed_at <= ?")
+            values.append(until)
+        if outcome is not None:
+            clauses.append(
+                "EXISTS (SELECT 1 FROM turns model_turn "
+                "WHERE model_turn.id = e.turn_id AND model_turn.outcome = ?)"
+            )
+            values.append(outcome)
+        bounded = max(1, min(50_000, limit))
+        with self._lock:
+            rows = self._connection.execute(
+                f"""
+                SELECT e.safe_payload_json FROM events e
+                WHERE {' AND '.join(clauses)}
+                ORDER BY e.observed_at DESC, e.rowid DESC LIMIT ?
+                """,
+                (*values, bounded + 1),
+            ).fetchall()
+        limited = len(rows) > bounded
+        return (
+            [json.loads(row["safe_payload_json"]) for row in rows[:bounded]],
+            limited,
+        )
 
     def summary(self, **filters: Any) -> dict[str, Any]:
         rows = self.list_turns(limit=500, **filters)
@@ -612,9 +714,9 @@ class TelemetryStore:
             "active_agents": sum(agent["current_turn_id"] is not None for agent in agents),
             **self._aggregate(rows),
         }
-        fleet["model_metrics"] = self._model_metrics(
-            self._model_events_for_turns([str(row["id"]) for row in rows])
-        )
+        model_events, model_events_limited = self._filtered_model_events(**filters)
+        fleet["model_metrics"] = self._model_metrics(model_events)
+        fleet["model_metrics"]["limited"] = model_events_limited
         return {
             "fleet": fleet,
             "groups": {
