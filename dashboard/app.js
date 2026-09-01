@@ -39,6 +39,13 @@ function formatRate(value) {
   return value === null || value === undefined ? "—" : `${Math.round(value * 100)}%`;
 }
 
+function formatTokens(value) {
+  if (!Number.isFinite(value)) return "—";
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}m`;
+  if (value >= 1000) return `${(value / 1000).toFixed(value >= 100_000 ? 0 : 1)}k`;
+  return Math.round(value).toLocaleString();
+}
+
 function cancellationLabel(value) {
   return {
     client_requested: "Client requested",
@@ -139,6 +146,12 @@ function renderSummary() {
     ? ` · ${cancellationLabel(leadingCancellation[0])}: ${leadingCancellation[1]}`
     : "";
   $("#turn-outcomes").textContent = `${fleet.outcomes.failed || 0} failed · ${fleet.outcomes.cancelled || 0} cancelled${cancellationDetail}`;
+  const toolObservation = fleet.tool_observation || {};
+  const observedTurns = toolObservation.observed_turns || 0;
+  const terminalTurns = observedTurns + (toolObservation.unavailable_turns || 0);
+  $("#tool-observation").textContent = terminalTurns
+    ? `${formatRate(toolObservation.coverage)} coverage · ${toolObservation.tool_uses || 0} calls`
+    : "—";
   const coverage = fleet.metrics.ttfvt_ms.count;
   const banner = $("#status-banner");
   if (fleet.turn_count > 0 && coverage < fleet.turn_count) {
@@ -148,6 +161,68 @@ function renderSummary() {
   } else {
     banner.hidden = true;
   }
+}
+
+function performanceRow(label, value, detail = "") {
+  const row = node("div", null, "performance-row");
+  row.append(node("span", label), node("strong", value), node("small", detail));
+  return row;
+}
+
+function infrastructureLatest(series, predicate, strategy = "sum") {
+  const values = series.filter(predicate).map((item) => Number(item.latest)).filter(Number.isFinite);
+  if (!values.length) return null;
+  if (strategy === "mean") return values.reduce((total, value) => total + value, 0) / values.length;
+  return values.reduce((total, value) => total + value, 0);
+}
+
+function renderPerformance() {
+  const model = state.summary?.fleet?.model_metrics || {};
+  const infrastructure = state.summary?.fleet?.infrastructure_metrics || {};
+  const series = infrastructure.series || [];
+  $("#model-ttft-p50").textContent = formatMs(model.ttft_ms?.p50);
+  $("#model-ttft-p95").textContent = formatMs(model.ttft_ms?.p95);
+  $("#model-input-p50").textContent = formatTokens(model.input_tokens?.p50);
+  $("#model-input-p95").textContent = formatTokens(model.input_tokens?.p95);
+  const callP50 = model.per_call_output_tokens_per_second?.p50;
+  $("#model-call-tps-p50").textContent = Number.isFinite(callP50) ? callP50.toFixed(1) : "—";
+  const serverTps = infrastructure.generation_tokens_per_second;
+  $("#server-output-tps").textContent = Number.isFinite(serverTps) ? serverTps.toFixed(1) : "—";
+  $("#performance-coverage").textContent = `${model.exact_call_count || 0} exact calls · ${infrastructure.sample_count || 0} infrastructure samples`;
+
+  const concurrency = $("#decode-concurrency-bands");
+  concurrency.replaceChildren();
+  const populatedBands = (model.decode_concurrency_bands || []).filter((band) => band.call_count);
+  if (!populatedBands.length) {
+    concurrency.append(node("p", "No exact streaming calls in this window.", "empty-card"));
+  } else {
+    for (const band of populatedBands) {
+      const rate = band.output_tokens_per_second;
+      concurrency.append(performanceRow(
+        `${band.band} active`,
+        Number.isFinite(rate) ? `${rate.toFixed(1)} tok/s` : "—",
+        `${band.call_count} call${band.call_count === 1 ? "" : "s"}`,
+      ));
+    }
+  }
+
+  const capacity = $("#capacity-signals");
+  capacity.replaceChildren();
+  const running = infrastructureLatest(series, (item) => item.metric_name === "requests_running");
+  const waiting = infrastructureLatest(series, (item) => item.metric_name === "requests_waiting");
+  const kvCache = infrastructureLatest(series, (item) => item.metric_name === "gpu_kv_cache_usage_ratio", "mean");
+  const gpuUtilization = infrastructureLatest(
+    series,
+    (item) => item.scope === "hardware" && item.metric_name.endsWith("utilization_percent"),
+    "mean",
+  );
+  const signals = [
+    ["Requests running", running === null ? "—" : running.toFixed(0), "latest"],
+    ["Requests waiting", waiting === null ? "—" : waiting.toFixed(0), "latest"],
+    ["GPU KV cache", kvCache === null ? "—" : `${(kvCache * 100).toFixed(1)}%`, "latest"],
+    ["GPU utilization", gpuUtilization === null ? "—" : `${gpuUtilization.toFixed(1)}%`, "latest mean"],
+  ];
+  for (const [label, value, detail] of signals) capacity.append(performanceRow(label, value, detail));
 }
 
 function renderAgents() {
@@ -304,7 +379,12 @@ function renderTurns() {
     row.append(cell(formatMs(turn.first_tool_ms)));
     row.append(cell(formatMs(turn.duration_ms)));
     row.append(cell(Number.isFinite(turn.output_tokens_per_second) ? turn.output_tokens_per_second.toFixed(1) : "—"));
-    row.append(cell(turn.tool_count ?? "—"));
+    const toolsAvailable = turn.tool_observation_mode && turn.tool_observation_mode !== "unavailable";
+    const toolsCell = cell(toolsAvailable ? turn.tool_count ?? 0 : "—");
+    toolsCell.title = toolsAvailable
+      ? `Observed via ${turn.tool_observation_mode.replace("_", " ")}`
+      : "Tool observation unavailable for this turn";
+    row.append(toolsCell);
     const qualityCell = document.createElement("td");
     qualityCell.append(quality(turn.measurement_quality, turn.duration_ms === null));
     row.append(qualityCell);
@@ -455,6 +535,7 @@ async function refresh() {
     $("#last-updated").textContent = `Updated ${new Date().toLocaleTimeString()}`;
     $("#export-link").href = `/api/v1/export.csv?${suffix}`;
     renderSummary();
+    renderPerformance();
     renderAgents();
     renderInfrastructure();
     renderTurns();

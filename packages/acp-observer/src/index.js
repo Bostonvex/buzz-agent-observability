@@ -50,6 +50,8 @@ export function createAcpObserverFromEnv(overrides = {}, environment = process.e
       harnessVersion: overrides.harnessVersion,
       model: overrides.model,
       endpointId: environment.BUZZ_TELEMETRY_ENDPOINT_ID ?? overrides.endpointId,
+      toolObservationMode:
+        environment.BUZZ_TELEMETRY_TOOL_OBSERVATION_MODE ?? overrides.toolObservationMode,
       producerName: overrides.producerName,
       producerVersion: overrides.producerVersion,
       agentTelemetryId: environment.BUZZ_TELEMETRY_AGENT_ID,

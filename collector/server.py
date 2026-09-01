@@ -322,7 +322,8 @@ def make_handler(state: AppState) -> type[BaseHTTPRequestHandler]:
                 fieldnames = [
                     "id", "agent_id", "agent_display_name", "harness", "model", "endpoint_id",
                     "started_at", "ended_at", "outcome", "ttfa_ms", "ttfvt_ms", "first_tool_ms",
-                    "duration_ms", "max_stall_ms", "tool_count", "measurement_quality",
+                    "duration_ms", "max_stall_ms", "tool_count", "tool_observation_mode",
+                    "measurement_quality",
                     "error_category", "error_code", "cancellation_reason",
                 ]
                 writer = csv.DictWriter(output, fieldnames=fieldnames, extrasaction="ignore")

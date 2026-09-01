@@ -38,6 +38,7 @@ class TelemetryStoreTests(unittest.TestCase):
                     "ttfvt_ms": 170,
                     "max_stall_ms": 90,
                     "tool_count": 2,
+                    "tool_observation_mode": "acp_updates",
                     "measurement_quality": "exact",
                     "outcome": "completed",
                 },
@@ -50,6 +51,8 @@ class TelemetryStoreTests(unittest.TestCase):
         self.assertIsNone(agent["current_turn_id"])
         self.assertEqual(turn["duration_ms"], 820)
         self.assertEqual(turn["tool_count"], 2)
+        self.assertEqual(turn["tool_observation_mode"], "acp_updates")
+        self.assertEqual(self.store.summary()["fleet"]["tool_observation"]["coverage"], 1)
 
     def test_model_events_do_not_overwrite_terminal_turn_fields(self) -> None:
         cancelled = validate_event(
@@ -312,6 +315,101 @@ class TelemetryStoreTests(unittest.TestCase):
         self.assertEqual(metrics["exact_output_tokens"], 60)
         self.assertEqual(metrics["exact_decode_ms"], 2500)
         self.assertEqual(metrics["output_tokens_per_second"], 24)
+
+    def test_model_performance_metrics_include_context_and_decode_concurrency(self) -> None:
+        completed = (
+            ("turn-one", "local-example", "2026-08-31T12:00:02Z", 2000, 40, 10_000),
+            ("turn-two", "local-example", "2026-08-31T12:00:02Z", 1000, 30, 20_000),
+            ("turn-three", "local-example", "2026-08-31T12:00:04Z", 1000, 40, 30_000),
+            ("turn-four", "other-endpoint", "2026-08-31T12:00:02Z", 2000, 60, 40_000),
+        )
+        self.store.insert_events(
+            [
+                validate_event(
+                    event(
+                        "model.completed",
+                        turn_id=turn_id,
+                        endpoint_id=endpoint_id,
+                        observed_at=observed_at,
+                        attributes={
+                            "duration_ms": decode_ms + 100,
+                            "decode_ms": decode_ms,
+                            "http_status": 200,
+                            "input_tokens": input_tokens,
+                            "output_tokens": output_tokens,
+                            "correlation": "exact",
+                            "measurement_quality": "exact",
+                        },
+                    )
+                )
+                for turn_id, endpoint_id, observed_at, decode_ms, output_tokens, input_tokens in completed
+            ]
+        )
+
+        metrics = self.store.summary()["fleet"]["model_metrics"]
+        self.assertEqual(metrics["input_tokens"]["p50"], 25_000)
+        self.assertEqual(metrics["input_tokens"]["p95"], 38_500)
+        self.assertEqual(metrics["per_call_output_tokens_per_second"]["p50"], 30)
+        bands = {band["band"]: band for band in metrics["decode_concurrency_bands"]}
+        self.assertEqual(bands["1"]["call_count"], 2)
+        self.assertAlmostEqual(bands["1"]["output_tokens_per_second"], 100 / 3)
+        self.assertEqual(bands["2"]["call_count"], 2)
+        self.assertAlmostEqual(bands["2"]["output_tokens_per_second"], 70 / 3)
+        self.assertEqual(bands["2"]["per_call_p50_tokens_per_second"], 25)
+
+    def test_infrastructure_metrics_report_latest_values_and_counter_rates(self) -> None:
+        samples = []
+        for second, value in ((0, 100), (10, 150), (20, 5), (30, 25)):
+            item = event(
+                "server.sample",
+                agent_id="shared-infrastructure",
+                display_name="Shared infrastructure",
+                turn_id=None,
+                endpoint_id="local-example",
+                observed_at=f"2026-08-31T12:00:{second:02d}Z",
+                attributes={
+                    "metric_name": "generation_tokens_total",
+                    "value": value,
+                    "unit": "tokens",
+                    "measurement_quality": "exact",
+                },
+            )
+            item["harness"] = None
+            item["model"] = None
+            item["session_id"] = None
+            samples.append(item)
+        for second, value in ((0, 2), (30, 4)):
+            item = event(
+                "server.sample",
+                agent_id="shared-infrastructure",
+                display_name="Shared infrastructure",
+                turn_id=None,
+                endpoint_id="local-example",
+                observed_at=f"2026-08-31T12:00:{second:02d}Z",
+                attributes={
+                    "metric_name": "requests_running",
+                    "value": value,
+                    "unit": "requests",
+                    "measurement_quality": "exact",
+                },
+            )
+            item["harness"] = None
+            item["model"] = None
+            item["session_id"] = None
+            samples.append(item)
+        self.store.insert_events([validate_event(item) for item in samples])
+
+        metrics = self.store.summary(
+            since="2026-08-31T12:00:00.000Z", until="2026-08-31T12:00:30.000Z"
+        )["fleet"]["infrastructure_metrics"]
+        self.assertEqual(metrics["sample_count"], 6)
+        self.assertAlmostEqual(metrics["generation_tokens_per_second"], 70 / 30, places=6)
+        series = {item["metric_name"]: item for item in metrics["series"]}
+        self.assertEqual(series["generation_tokens_total"]["latest"], 25)
+        self.assertEqual(series["generation_tokens_total"]["counter_resets"], 1)
+        self.assertEqual(series["requests_running"]["latest"], 4)
+        self.assertEqual(series["requests_running"]["mean"], 3)
+        self.assertIsNone(series["requests_running"]["rate_per_second"])
 
     def test_unattributed_model_traffic_is_fleet_only(self) -> None:
         model_events = [

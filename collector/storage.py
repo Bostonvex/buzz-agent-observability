@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import heapq
 import json
 import os
 import sqlite3
@@ -91,6 +92,7 @@ CREATE TABLE IF NOT EXISTS turns (
     duration_ms REAL,
     max_stall_ms REAL,
     tool_count INTEGER,
+    tool_observation_mode TEXT,
     measurement_quality TEXT,
     error_category TEXT,
     error_code TEXT,
@@ -188,6 +190,7 @@ class TelemetryStore:
             "harness": "TEXT",
             "model": "TEXT",
             "endpoint_id": "TEXT",
+            "tool_observation_mode": "TEXT",
         }
         for name, data_type in additions.items():
             if name not in existing:
@@ -209,7 +212,7 @@ class TelemetryStore:
             self._connection.execute(
                 """
                 UPDATE turns SET ended_at = ?, outcome = ?, duration_ms = ?,
-                    max_stall_ms = ?, tool_count = ?, measurement_quality = ?,
+                    max_stall_ms = ?, tool_count = ?, tool_observation_mode = ?, measurement_quality = ?,
                     error_category = ?, error_code = ?, cancellation_reason = ?
                 WHERE id = ?
                 """,
@@ -219,6 +222,7 @@ class TelemetryStore:
                     attributes.get("duration_ms"),
                     attributes.get("max_stall_ms"),
                     attributes.get("tool_count"),
+                    attributes.get("tool_observation_mode"),
                     attributes.get("measurement_quality"),
                     attributes.get("error_category"),
                     attributes.get("error_code"),
@@ -292,9 +296,9 @@ class TelemetryStore:
             INSERT INTO turns(
                 id, agent_id, session_id, started_at, ended_at, outcome, ttfa_ms,
                 ttfvt_ms, first_tool_ms, duration_ms, max_stall_ms, tool_count,
-                measurement_quality, error_category, error_code, harness, model,
+                tool_observation_mode, measurement_quality, error_category, error_code, harness, model,
                 cancellation_reason, endpoint_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 started_at = MIN(turns.started_at, excluded.started_at),
                 ended_at = COALESCE(excluded.ended_at, turns.ended_at),
@@ -309,6 +313,7 @@ class TelemetryStore:
                     ELSE MAX(turns.max_stall_ms, excluded.max_stall_ms)
                 END,
                 tool_count = COALESCE(excluded.tool_count, turns.tool_count),
+                tool_observation_mode = COALESCE(excluded.tool_observation_mode, turns.tool_observation_mode),
                 measurement_quality = COALESCE(excluded.measurement_quality, turns.measurement_quality),
                 error_category = COALESCE(excluded.error_category, turns.error_category),
                 error_code = COALESCE(excluded.error_code, turns.error_code),
@@ -337,6 +342,7 @@ class TelemetryStore:
                 attributes.get("max_stall_ms", attributes.get("gap_ms") if event_type == "turn.stall" else None)
                 if event_type.startswith("turn.") else None,
                 attributes.get("tool_count") if terminal_turn else None,
+                attributes.get("tool_observation_mode") if terminal_turn else None,
                 attributes.get("measurement_quality") if event_type.startswith("turn.") else None,
                 attributes.get("error_category") if event_type == "turn.failed" else None,
                 attributes.get("error_code") if event_type == "turn.failed" else None,
@@ -540,7 +546,7 @@ class TelemetryStore:
                 SELECT t.id, t.agent_id, a.display_name AS agent_display_name, t.session_id,
                        t.started_at, t.ended_at, t.outcome, t.ttfa_ms, t.ttfvt_ms,
                        t.first_tool_ms, t.duration_ms, t.max_stall_ms, t.tool_count,
-                       t.measurement_quality, t.error_category, t.error_code,
+                       t.tool_observation_mode, t.measurement_quality, t.error_category, t.error_code,
                        t.cancellation_reason, t.harness, t.model, t.endpoint_id
                 FROM turns t JOIN agents a ON a.id = t.agent_id
                 {where} ORDER BY t.started_at DESC LIMIT ? OFFSET ?
@@ -583,6 +589,102 @@ class TelemetryStore:
         return ordered[lower] * (1 - weight) + ordered[upper] * weight
 
     @classmethod
+    def _numeric_summary(cls, values: list[float]) -> dict[str, Any]:
+        return {
+            "count": len(values),
+            "mean": mean(values) if values else None,
+            "p05": cls._percentile(values, 0.05),
+            "p50": cls._percentile(values, 0.50),
+            "p95": cls._percentile(values, 0.95),
+            "minimum": min(values) if values else None,
+            "maximum": max(values) if values else None,
+        }
+
+    @classmethod
+    def _decode_concurrency_bands(
+        cls, exact_decode_events: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        intervals: list[dict[str, Any]] = []
+        for event in exact_decode_events:
+            attributes = event["attributes"]
+            decode_ms = float(attributes["decode_ms"])
+            try:
+                completed_at = datetime.fromisoformat(
+                    event["observed_at"].replace("Z", "+00:00")
+                ).timestamp() * 1000
+            except (KeyError, TypeError, ValueError):
+                continue
+            intervals.append(
+                {
+                    "endpoint": event.get("endpoint_id") or "unknown",
+                    "start_ms": completed_at - decode_ms,
+                    "end_ms": completed_at,
+                    "midpoint_ms": completed_at - decode_ms / 2,
+                    "decode_ms": decode_ms,
+                    "output_tokens": float(attributes["output_tokens"]),
+                    "tokens_per_second": float(attributes["output_tokens"])
+                    / (decode_ms / 1000),
+                }
+            )
+
+        endpoint_intervals: dict[str, list[dict[str, Any]]] = {}
+        for interval in intervals:
+            endpoint_intervals.setdefault(str(interval["endpoint"]), []).append(interval)
+        for endpoint_group in endpoint_intervals.values():
+            starts = sorted(endpoint_group, key=lambda interval: interval["start_ms"])
+            midpoint_order = sorted(
+                endpoint_group, key=lambda interval: interval["midpoint_ms"]
+            )
+            active_ends: list[float] = []
+            start_index = 0
+            for interval in midpoint_order:
+                midpoint = interval["midpoint_ms"]
+                while (
+                    start_index < len(starts)
+                    and starts[start_index]["start_ms"] <= midpoint
+                ):
+                    heapq.heappush(active_ends, starts[start_index]["end_ms"])
+                    start_index += 1
+                while active_ends and active_ends[0] < midpoint:
+                    heapq.heappop(active_ends)
+                interval["concurrency"] = float(len(active_ends))
+
+        definitions = (
+            ("1", 1, 1),
+            ("2", 2, 2),
+            ("3-4", 3, 4),
+            ("5-8", 5, 8),
+            ("9+", 9, None),
+        )
+        bands = []
+        for label, minimum, maximum in definitions:
+            matching = [
+                interval
+                for interval in intervals
+                if interval["concurrency"] >= minimum
+                and (maximum is None or interval["concurrency"] <= maximum)
+            ]
+            decode_ms = sum(interval["decode_ms"] for interval in matching)
+            output_tokens = sum(interval["output_tokens"] for interval in matching)
+            per_call_rates = [interval["tokens_per_second"] for interval in matching]
+            bands.append(
+                {
+                    "band": label,
+                    "call_count": len(matching),
+                    "average_concurrency": mean(
+                        [interval["concurrency"] for interval in matching]
+                    )
+                    if matching
+                    else None,
+                    "output_tokens_per_second": output_tokens / (decode_ms / 1000)
+                    if decode_ms > 0
+                    else None,
+                    "per_call_p50_tokens_per_second": cls._percentile(per_call_rates, 0.50),
+                }
+            )
+        return bands
+
+    @classmethod
     def _metric(cls, rows: list[dict[str, Any]], name: str) -> dict[str, Any]:
         values = [float(row[name]) for row in rows if row.get(name) is not None]
         qualities: dict[str, int] = {}
@@ -613,6 +715,14 @@ class TelemetryStore:
                 reason = row.get("cancellation_reason") or "unavailable"
                 cancellation_reasons[reason] = cancellation_reasons.get(reason, 0) + 1
         terminal = sum(value for key, value in outcomes.items() if key != "active")
+        tool_observed = [
+            row for row in rows
+            if row.get("outcome") and row.get("tool_observation_mode") not in (None, "unavailable")
+        ]
+        tool_unavailable = [
+            row for row in rows
+            if row.get("outcome") and row.get("tool_observation_mode") in (None, "unavailable")
+        ]
         return {
             "turn_count": len(rows),
             "active_turns": outcomes.get("active", 0),
@@ -621,6 +731,13 @@ class TelemetryStore:
             "success_rate": outcomes.get("completed", 0) / terminal if terminal else None,
             "failure_rate": outcomes.get("failed", 0) / terminal if terminal else None,
             "cancellation_rate": outcomes.get("cancelled", 0) / terminal if terminal else None,
+            "tool_observation": {
+                "observed_turns": len(tool_observed),
+                "unavailable_turns": len(tool_unavailable),
+                "coverage": len(tool_observed) / terminal if terminal else None,
+                "tool_uses": sum(int(row.get("tool_count") or 0) for row in tool_observed),
+                "turns_with_tools": sum(int(row.get("tool_count") or 0) > 0 for row in tool_observed),
+            },
             "metrics": {
                 name: cls._metric(rows, name)
                 for name in ("ttfa_ms", "ttfvt_ms", "first_tool_ms", "duration_ms", "max_stall_ms")
@@ -655,6 +772,18 @@ class TelemetryStore:
         output_tokens = sum(
             int(event["attributes"]["output_tokens"]) for event in exact_decode_events
         )
+        input_token_values = [
+            float(event["attributes"]["input_tokens"])
+            for event in terminal_events
+            if event["event_type"] == "model.completed"
+            and event["attributes"].get("measurement_quality") == "exact"
+            and isinstance(event["attributes"].get("input_tokens"), int)
+        ]
+        per_call_rates = [
+            float(event["attributes"]["output_tokens"])
+            / (float(event["attributes"]["decode_ms"]) / 1000)
+            for event in exact_decode_events
+        ]
         correlations: dict[str, int] = {}
         for event in terminal_events:
             correlation = str(event["attributes"].get("correlation", "unavailable"))
@@ -681,6 +810,9 @@ class TelemetryStore:
                 "minimum": min(ttft_values) if ttft_values else None,
                 "maximum": max(ttft_values) if ttft_values else None,
             },
+            "input_tokens": cls._numeric_summary(input_token_values),
+            "per_call_output_tokens_per_second": cls._numeric_summary(per_call_rates),
+            "decode_concurrency_bands": cls._decode_concurrency_bands(exact_decode_events),
             "exact_output_tokens": output_tokens,
             "exact_decode_ms": decode_ms or None,
             "output_tokens_per_second": output_tokens / (decode_ms / 1000)
@@ -755,6 +887,121 @@ class TelemetryStore:
             limited,
         )
 
+    def _infrastructure_metrics(
+        self,
+        *,
+        since: str | None = None,
+        until: str | None = None,
+        endpoint_id: str | None = None,
+    ) -> dict[str, Any]:
+        clauses = ["event_type IN ('server.sample', 'hardware.sample')"]
+        values: list[Any] = []
+        if since is not None:
+            clauses.append("observed_at >= ?")
+            values.append(since)
+        if until is not None:
+            clauses.append("observed_at <= ?")
+            values.append(until)
+        if endpoint_id is not None:
+            clauses.append("endpoint_id = ?")
+            values.append(endpoint_id)
+
+        with self._lock:
+            rows = self._connection.execute(
+                f"""
+                WITH samples AS (
+                    SELECT rowid, observed_at, event_type, endpoint_id,
+                           json_extract(safe_payload_json, '$.attributes.provider_id') AS provider_id,
+                           json_extract(safe_payload_json, '$.attributes.node_id') AS node_id,
+                           json_extract(safe_payload_json, '$.attributes.metric_name') AS metric_name,
+                           json_extract(safe_payload_json, '$.attributes.unit') AS unit,
+                           json_extract(safe_payload_json, '$.attributes.measurement_quality') AS measurement_quality,
+                           CAST(json_extract(safe_payload_json, '$.attributes.value') AS REAL) AS value,
+                           (julianday(observed_at) - 2440587.5) * 86400.0 AS observed_seconds
+                    FROM events WHERE {' AND '.join(clauses)}
+                ), ordered AS (
+                    SELECT *,
+                           lag(value) OVER series_order AS previous_value,
+                           row_number() OVER series_latest AS latest_rank
+                    FROM samples
+                    WINDOW
+                        series_order AS (
+                            PARTITION BY event_type, endpoint_id, provider_id, node_id, metric_name, unit
+                            ORDER BY observed_at, rowid
+                        ),
+                        series_latest AS (
+                            PARTITION BY event_type, endpoint_id, provider_id, node_id, metric_name, unit
+                            ORDER BY observed_at DESC, rowid DESC
+                        )
+                )
+                SELECT event_type, endpoint_id, provider_id, node_id, metric_name, unit,
+                       COUNT(*) AS sample_count, AVG(value) AS mean_value,
+                       MIN(value) AS minimum_value, MAX(value) AS maximum_value,
+                       MAX(CASE WHEN latest_rank = 1 THEN value END) AS latest_value,
+                       MAX(CASE WHEN latest_rank = 1 THEN observed_at END) AS latest_at,
+                       MAX(CASE WHEN latest_rank = 1 THEN measurement_quality END) AS measurement_quality,
+                       SUM(CASE
+                               WHEN previous_value IS NULL THEN 0
+                               WHEN value >= previous_value THEN value - previous_value
+                               ELSE 0
+                           END) AS positive_delta,
+                       SUM(CASE WHEN previous_value IS NOT NULL AND value < previous_value THEN 1 ELSE 0 END)
+                           AS counter_resets,
+                       MAX(observed_seconds) - MIN(observed_seconds) AS elapsed_seconds
+                FROM ordered
+                GROUP BY event_type, endpoint_id, provider_id, node_id, metric_name, unit
+                ORDER BY event_type, endpoint_id, provider_id, node_id, metric_name
+                """,
+                tuple(values),
+            ).fetchall()
+
+        counter_metrics = {
+            "prompt_tokens_total",
+            "generation_tokens_total",
+            "successful_requests_total",
+            "preemptions_total",
+        }
+        series = []
+        for row in rows:
+            elapsed_seconds = float(row["elapsed_seconds"] or 0)
+            metric_name = str(row["metric_name"])
+            rate = None
+            if metric_name in counter_metrics and elapsed_seconds > 0:
+                rate = float(row["positive_delta"] or 0) / elapsed_seconds
+            series.append(
+                {
+                    "scope": "server" if row["event_type"] == "server.sample" else "hardware",
+                    "endpoint_id": row["endpoint_id"],
+                    "provider_id": row["provider_id"],
+                    "node_id": row["node_id"],
+                    "metric_name": metric_name,
+                    "unit": row["unit"],
+                    "sample_count": int(row["sample_count"]),
+                    "mean": float(row["mean_value"]),
+                    "minimum": float(row["minimum_value"]),
+                    "maximum": float(row["maximum_value"]),
+                    "latest": float(row["latest_value"]),
+                    "latest_at": row["latest_at"],
+                    "measurement_quality": row["measurement_quality"] or "unavailable",
+                    "rate_per_second": rate,
+                    "counter_resets": int(row["counter_resets"] or 0)
+                    if metric_name in counter_metrics
+                    else None,
+                }
+            )
+
+        generation_rates = [
+            item["rate_per_second"]
+            for item in series
+            if item["metric_name"] == "generation_tokens_total"
+            and item["rate_per_second"] is not None
+        ]
+        return {
+            "series": series,
+            "sample_count": sum(item["sample_count"] for item in series),
+            "generation_tokens_per_second": sum(generation_rates) if generation_rates else None,
+        }
+
     def summary(self, **filters: Any) -> dict[str, Any]:
         rows = self.list_turns(limit=500, **filters)
         agents = self.list_agents(limit=500, **filters)
@@ -789,6 +1036,14 @@ class TelemetryStore:
         model_events, model_events_limited = self._filtered_model_events(**filters)
         fleet["model_metrics"] = self._model_metrics(model_events)
         fleet["model_metrics"]["limited"] = model_events_limited
+        infrastructure_filters = {
+            key: value
+            for key, value in filters.items()
+            if key in {"since", "until", "endpoint_id"}
+        }
+        fleet["infrastructure_metrics"] = self._infrastructure_metrics(
+            **infrastructure_filters
+        )
         return {
             "fleet": fleet,
             "groups": {

@@ -140,6 +140,7 @@ test("observer emits deterministic content-free turn, tool, usage, and latency e
   assert.equal(completed.attributes.ttfvt_ms, 200);
   assert.equal(completed.attributes.first_tool_ms, 160);
   assert.equal(completed.attributes.tool_count, 1);
+  assert.equal(completed.attributes.tool_observation_mode, "acp_updates");
 
   const serialized = JSON.stringify(transport.events);
   for (const forbidden of [
@@ -156,6 +157,23 @@ test("observer emits deterministic content-free turn, tool, usage, and latency e
     assert.doesNotMatch(serialized, new RegExp(forbidden.replaceAll("/", "\\/"), "u"));
   }
   assert.match(serialized, /Implementor 02/u);
+});
+
+test("unavailable tool observation never reports a false zero", () => {
+  const { clock, transport, observer } = setup({ toolObservationMode: "unavailable" });
+  establishSession(observer, clock);
+  clock.set(100);
+  observer.observeClientMessage({
+    id: 2,
+    method: "session/prompt",
+    params: { sessionId: "raw-session-secret" },
+  }, clock.now());
+  clock.set(200);
+  observer.observeServerMessage({ id: 2, result: { stopReason: "end_turn" } }, clock.now());
+
+  const completed = transport.events.find((event) => event.event_type === "turn.completed");
+  assert.equal(completed.attributes.tool_observation_mode, "unavailable");
+  assert.equal(Object.hasOwn(completed.attributes, "tool_count"), false);
 });
 
 test("cancellation and JSON-RPC failure produce exactly one terminal turn event", () => {

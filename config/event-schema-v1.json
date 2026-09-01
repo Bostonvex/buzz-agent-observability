@@ -59,6 +59,7 @@
       "properties": {
         "measurement_quality": { "enum": ["exact", "derived", "estimated", "unavailable"] },
         "harness_version": { "$ref": "#/$defs/safeString" },
+        "tool_observation_mode": { "enum": ["acp_updates", "execution_hook", "unavailable"] },
         "signal": { "$ref": "#/$defs/safeString" },
         "outcome": { "$ref": "#/$defs/safeString" },
         "turn_class": { "$ref": "#/$defs/safeString" },

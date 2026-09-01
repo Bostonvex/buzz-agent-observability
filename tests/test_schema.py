@@ -46,6 +46,14 @@ class EventSchemaTests(unittest.TestCase):
         with self.assertRaisesRegex(EventValidationError, "invalid_cancellation_reason"):
             validate_event(event("turn.cancelled", attributes={"cancellation_reason": "guess"}))
 
+    def test_tool_observation_mode_is_strictly_enumerated(self) -> None:
+        valid = validate_event(
+            event("turn.completed", attributes={"tool_observation_mode": "acp_updates"})
+        )
+        self.assertEqual(valid["attributes"]["tool_observation_mode"], "acp_updates")
+        with self.assertRaisesRegex(EventValidationError, "invalid_tool_observation_mode"):
+            validate_event(event("turn.completed", attributes={"tool_observation_mode": "guess"}))
+
     def test_batch_is_bounded(self) -> None:
         with self.assertRaisesRegex(EventValidationError, "batch_too_large"):
             validate_batch([event() for _ in range(3)], maximum_events=2)

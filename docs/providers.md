@@ -15,6 +15,12 @@ buzz-observability serve \
 
 The URL must be a fixed HTTP(S) `/metrics` endpoint with no credentials, query, or fragment. Redirects are rejected. Responses are capped at 2 MiB. Only documented scheduler, cache, token-counter, success, preemption, TTFT, queue, and end-to-end latency families are parsed. Prometheus labels—including model and deployment labels—are discarded rather than stored. Multi-series gauges are averaged, counters are summed, and histogram means are marked `derived`.
 
+The summary API derives wall-clock server generation throughput from positive
+deltas in `generation_tokens_total`. Counter resets are counted and excluded
+from the delta rather than interpreted as negative or burst throughput. The
+dashboard leaves this rate unavailable until at least two samples with elapsed
+time are present.
+
 ## NVIDIA
 
 Local collection uses one fixed read-only query and does not require root:

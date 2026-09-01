@@ -273,6 +273,7 @@ def command_demo(args: argparse.Namespace) -> int:
                         "ttfvt_ms": 180 + index * 40,
                         "max_stall_ms": 210,
                         "tool_count": index - 1,
+                        "tool_observation_mode": "acp_updates",
                         "outcome": "completed",
                         "measurement_quality": "exact",
                     },

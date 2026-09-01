@@ -54,6 +54,7 @@ export function baseConfig(overrides = {}) {
     harnessVersion: "0.1.0",
     model: "example-model",
     endpointId: "local-example",
+    toolObservationMode: "acp_updates",
     producerName: "test-harness",
     producerVersion: "0.1.0",
     randomUUID: deterministicUuid(),

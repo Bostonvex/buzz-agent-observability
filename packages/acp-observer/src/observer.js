@@ -18,6 +18,7 @@ const MEANINGFUL_UPDATES = new Set([
   "usage_update",
 ]);
 const TERMINAL_TOOL_STATUSES = new Set(["completed", "failed"]);
+const TOOL_OBSERVATION_MODES = new Set(["acp_updates", "execution_hook", "unavailable"]);
 
 function positiveInteger(value, fallback, maximum) {
   const number = Number(value);
@@ -43,6 +44,10 @@ function finiteNonNegative(value) {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
 }
 
+function toolObservationMode(value) {
+  return TOOL_OBSERVATION_MODES.has(value) ? value : "unavailable";
+}
+
 function hasNonEmptyText(update) {
   return (
     update?.sessionUpdate === "agent_message_chunk" &&
@@ -56,9 +61,10 @@ function measurementAttributes(turn, now) {
   const attributes = {
     duration_ms: Math.max(0, now - turn.startedAt),
     max_stall_ms: turn.maxStallMs,
-    tool_count: turn.toolCount,
+    tool_observation_mode: turn.toolObservationMode,
     measurement_quality: "exact",
   };
+  if (turn.toolObservationMode !== "unavailable") attributes.tool_count = turn.toolCount;
   if (turn.firstActivityAt !== null) attributes.ttfa_ms = turn.firstActivityAt - turn.startedAt;
   if (turn.firstVisibleTextAt !== null) attributes.ttfvt_ms = turn.firstVisibleTextAt - turn.startedAt;
   if (turn.firstToolAt !== null) attributes.first_tool_ms = turn.firstToolAt - turn.startedAt;
@@ -75,6 +81,7 @@ class AcpObserver {
     this.harness = safeIdentifier(config.harness);
     this.model = safeIdentifier(config.model);
     this.endpointId = safeIdentifier(config.endpointId);
+    this.toolObservationMode = toolObservationMode(config.toolObservationMode);
     this.producer = {
       name: safeIdentifier(config.producerName, "acp-observer"),
       version: safeIdentifier(config.producerVersion, "0.1.0"),
@@ -174,7 +181,10 @@ class AcpObserver {
         spanId: null,
         parentSpanId: null,
       },
-      { harness_version: this.harnessVersion },
+      {
+        harness_version: this.harnessVersion,
+        tool_observation_mode: this.toolObservationMode,
+      },
       this.processStartedAt,
     );
   }
@@ -256,6 +266,7 @@ class AcpObserver {
       firstToolAt: null,
       maxStallMs: 0,
       toolCount: 0,
+      toolObservationMode: this.toolObservationMode,
       tools: new Map(),
       ended: false,
     };
@@ -333,6 +344,7 @@ class AcpObserver {
     const rawToolId = update?.toolCallId;
     if (typeof rawToolId !== "string" && typeof rawToolId !== "number") return;
     const key = String(rawToolId);
+    if (turn.toolObservationMode === "unavailable") turn.toolObservationMode = "acp_updates";
     let tool = turn.tools.get(key);
     if (!tool) {
       if (turn.tools.size >= this.maxToolsPerTurn) {

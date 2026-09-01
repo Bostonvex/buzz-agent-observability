@@ -42,7 +42,35 @@
         <article><span>p95 duration</span><strong id="duration-p95">—</strong><small><span id="duration-p95-quality" class="quality unavailable">unavailable</span></small></article>
         <article><span>Success</span><strong id="success-rate">—</strong><small>terminal turns</small></article>
         <article><span>Fleet output tok/s</span><strong id="fleet-output-tps">—</strong><small><span id="fleet-output-tps-quality" class="quality unavailable">unavailable</span> · <span id="fleet-output-tps-coverage">0 measured calls · 0 attributed</span></small></article>
+        <article><span>Tool observation</span><strong id="tool-observation">—</strong><small>terminal-turn coverage · observed calls</small></article>
         <article><span>Raw events</span><strong id="event-count">—</strong><small id="journal-mode">SQLite —</small></article>
+      </section>
+
+      <section id="performance-view" aria-labelledby="performance-heading">
+        <div class="section-heading">
+          <div><p class="eyebrow">MODEL SERVICE</p><h2 id="performance-heading">Inference performance</h2></div>
+          <span id="performance-coverage">Waiting for exact model timing</span>
+        </div>
+        <div class="metrics performance-metrics" aria-label="Inference performance summary">
+          <article><span>p50 TTFT</span><strong id="model-ttft-p50">—</strong><small>first generated delta</small></article>
+          <article><span>p95 TTFT</span><strong id="model-ttft-p95">—</strong><small>tail responsiveness</small></article>
+          <article><span>p50 input</span><strong id="model-input-p50">—</strong><small>tokens per completed call</small></article>
+          <article><span>p95 input</span><strong id="model-input-p95">—</strong><small>context pressure</small></article>
+          <article><span>p50 call tok/s</span><strong id="model-call-tps-p50">—</strong><small>unweighted call median</small></article>
+          <article><span>Server output tok/s</span><strong id="server-output-tps">—</strong><small>wall-clock counter rate</small></article>
+        </div>
+        <div class="performance-grid">
+          <article class="performance-panel">
+            <h3>Decode rate by concurrency</h3>
+            <p>Per-stream weighted rate, grouped by active decodes at each call midpoint.</p>
+            <div id="decode-concurrency-bands" class="performance-rows"></div>
+          </article>
+          <article class="performance-panel">
+            <h3>Capacity signals</h3>
+            <p>Latest shared server and GPU samples in the selected window.</p>
+            <div id="capacity-signals" class="performance-rows"></div>
+          </article>
+        </div>
       </section>
 
       <section id="fleet-view">
@@ -85,7 +113,7 @@
               <th><button class="sort-button" type="button" data-turn-sort="first_tool_ms">First tool</button></th>
               <th><button class="sort-button" type="button" data-turn-sort="duration_ms">Duration</button></th>
               <th><button class="sort-button" type="button" data-turn-sort="output_tokens_per_second">Tok/s</button></th>
-              <th><button class="sort-button" type="button" data-turn-sort="tool_count">Tools</button></th>
+              <th><button class="sort-button" type="button" data-turn-sort="tool_count">Observed tools</button></th>
               <th><button class="sort-button" type="button" data-turn-sort="measurement_quality">Quality</button></th>
             </tr></thead>
             <tbody id="turns-body"><tr><td colspan="12" class="empty">No turns stored in this window.</td></tr></tbody>

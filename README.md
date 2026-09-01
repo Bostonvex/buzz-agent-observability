@@ -57,7 +57,7 @@ Integration-specific instructions are available for [DeepSeek](integrations/deep
 
 ## Optional model and infrastructure telemetry
 
-`buzz-model-proxy` is a loopback-only, fixed-upstream sidecar for exact connection, first-byte, streaming TTFT, decode, duration, and usage metadata. It supports OpenAI-compatible endpoints and Anthropic Messages, preserves response bytes and errors, and can correlate with the active ACP turn. The dashboard's **Fleet output tok/s** card reports weighted exact throughput across the currently filtered calls. See the [model proxy guide](docs/model-proxy.md).
+`buzz-model-proxy` is a loopback-only, fixed-upstream sidecar for exact connection, first-byte, streaming TTFT, decode, duration, and usage metadata. It supports OpenAI-compatible endpoints and Anthropic Messages, preserves response bytes and errors, and can correlate with the active ACP turn. The dashboard reports weighted fleet throughput, per-call throughput, TTFT and input-token distributions, and decode rate by concurrency band. See the [model proxy guide](docs/model-proxy.md).
 
 The collector can also poll shared infrastructure:
 
@@ -69,7 +69,7 @@ python3 -m collector serve \
   --nvidia-node-id workstation-gpu
 ```
 
-All providers are optional and disabled unless configured. Provider failures are isolated from ingestion and agent execution. Server and hardware samples are timestamp-correlated fleet context; they are never assigned to an individual agent. See [providers](docs/providers.md).
+All providers are optional and disabled unless configured. Provider failures are isolated from ingestion and agent execution. Server and hardware samples are timestamp-correlated fleet context; they are never assigned to an individual agent. When vLLM metrics are enabled, the dashboard also derives aggregate wall-clock generation tokens/second while safely handling counter resets. See [providers](docs/providers.md).
 
 ## Local API
 

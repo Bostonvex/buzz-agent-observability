@@ -65,7 +65,7 @@ AGENT_FIELDS = frozenset({"id", "display_name"})
 
 COMMON_ATTRIBUTES = frozenset({"measurement_quality"})
 EVENT_ATTRIBUTES = {
-    "process.started": frozenset({"harness_version"}),
+    "process.started": frozenset({"harness_version", "tool_observation_mode"}),
     "process.exited": frozenset({"exit_code", "signal", "outcome"}),
     "session.started": frozenset(),
     "session.ended": frozenset({"duration_ms", "outcome"}),
@@ -82,6 +82,7 @@ EVENT_ATTRIBUTES = {
             "first_tool_ms",
             "max_stall_ms",
             "tool_count",
+            "tool_observation_mode",
             "outcome",
         }
     ),
@@ -93,6 +94,7 @@ EVENT_ATTRIBUTES = {
             "first_tool_ms",
             "max_stall_ms",
             "tool_count",
+            "tool_observation_mode",
             "error_category",
             "error_code",
         }
@@ -100,7 +102,7 @@ EVENT_ATTRIBUTES = {
     "turn.cancelled": frozenset(
         {
             "duration_ms", "ttfa_ms", "ttfvt_ms", "first_tool_ms", "max_stall_ms",
-            "tool_count", "cancellation_reason",
+            "tool_count", "tool_observation_mode", "cancellation_reason",
         }
     ),
     "tool.started": frozenset({"tool_kind", "status"}),
@@ -143,6 +145,7 @@ EVENT_ATTRIBUTES = {
 
 QUALITY_VALUES = frozenset({"exact", "derived", "estimated", "unavailable"})
 CORRELATION_VALUES = frozenset({"exact", "ambiguous", "unavailable"})
+TOOL_OBSERVATION_MODE_VALUES = frozenset({"acp_updates", "execution_hook", "unavailable"})
 CANCELLATION_REASON_VALUES = frozenset(
     {"client_requested", "superseded_by_prompt", "agent_reported"}
 )
@@ -180,6 +183,7 @@ INTEGER_ATTRIBUTES = frozenset(
 STRING_ATTRIBUTES = frozenset(
     {
         "harness_version",
+        "tool_observation_mode",
         "signal",
         "outcome",
         "turn_class",
@@ -302,6 +306,10 @@ def _attributes(event_type: str, value: Any) -> dict[str, Any]:
         elif key == "cancellation_reason":
             if item not in CANCELLATION_REASON_VALUES:
                 _fail("invalid_cancellation_reason", path)
+            result[key] = item
+        elif key == "tool_observation_mode":
+            if item not in TOOL_OBSERVATION_MODE_VALUES:
+                _fail("invalid_tool_observation_mode", path)
             result[key] = item
         elif key in STRING_ATTRIBUTES:
             result[key] = _safe_string(item, path, maximum=128, identifier=False)

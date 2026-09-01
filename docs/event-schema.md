@@ -16,6 +16,13 @@ Required envelope fields:
 
 Timing values carry `measurement_quality` when relevant: `exact`, `derived`, `estimated`, or `unavailable`. TTFA (`turn.first_activity`), TTFVT (`turn.first_visible_text`), and model TTFT (`model.first_token`) are distinct measurements and must not be relabeled.
 
+Tool counts are capability-aware. `tool_observation_mode` is one of
+`acp_updates`, `execution_hook`, or `unavailable`. A terminal turn may report
+`tool_count: 0` only when its mode confirms an observation path; unavailable
+turns omit the count so absence of instrumentation is never presented as no
+tool use. `process.started` declares the adapter's configured mode and each
+terminal turn records the mode that applied to that turn.
+
 Model events use one span per HTTP call. `model.completed` may carry exact
 `connection_ms`, `first_byte_ms`, `decode_ms`, HTTP status, and documented
 usage counters. `model.first_token.elapsed_ms` is measured from request start
