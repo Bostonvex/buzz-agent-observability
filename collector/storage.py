@@ -784,6 +784,22 @@ class TelemetryStore:
             / (float(event["attributes"]["decode_ms"]) / 1000)
             for event in exact_decode_events
         ]
+        cached_token_values = [
+            float(event["attributes"]["cached_tokens"])
+            for event in terminal_events
+            if event["event_type"] == "model.completed"
+            and isinstance(event["attributes"].get("cached_tokens"), int)
+        ]
+        reasoning_token_values = [
+            float(event["attributes"]["reasoning_tokens"])
+            for event in terminal_events
+            if event["event_type"] == "model.completed"
+            and isinstance(event["attributes"].get("reasoning_tokens"), int)
+        ]
+        cached_token_sum = sum(cached_token_values) if cached_token_values else None
+        reasoning_token_sum = (
+            sum(reasoning_token_values) if reasoning_token_values else None
+        )
         correlations: dict[str, int] = {}
         for event in terminal_events:
             correlation = str(event["attributes"].get("correlation", "unavailable"))
@@ -818,6 +834,11 @@ class TelemetryStore:
             "output_tokens_per_second": output_tokens / (decode_ms / 1000)
             if decode_ms > 0
             else None,
+            "cached_tokens": {"count": len(cached_token_values), "sum": cached_token_sum},
+            "reasoning_tokens": {
+                "count": len(reasoning_token_values),
+                "sum": reasoning_token_sum,
+            },
             "correlation_counts": correlations,
         }
 
