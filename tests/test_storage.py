@@ -357,6 +357,33 @@ class TelemetryStoreTests(unittest.TestCase):
         self.assertAlmostEqual(bands["2"]["output_tokens_per_second"], 70 / 3)
         self.assertEqual(bands["2"]["per_call_p50_tokens_per_second"], 25)
 
+    def test_model_metrics_aggregate_cached_and_reasoning_tokens(self) -> None:
+        turns = [
+            ("turn-one", {"cached_tokens": 40, "reasoning_tokens": 30}),
+            ("turn-two", {"cached_tokens": 10, "reasoning_tokens": 5}),
+            ("turn-three", {}),  # no cached/reasoning tokens reported
+        ]
+        events = []
+        for turn_id, extra in turns:
+            attributes = {
+                "duration_ms": 1000,
+                "decode_ms": 900,
+                "http_status": 200,
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "correlation": "exact",
+                "measurement_quality": "exact",
+                **extra,
+            }
+            events.append(
+                validate_event(event("model.completed", turn_id=turn_id, attributes=attributes))
+            )
+        self.store.insert_events(events)
+
+        metrics = self.store.summary()["fleet"]["model_metrics"]
+        self.assertEqual(metrics["cached_tokens"], {"count": 2, "sum": 50})
+        self.assertEqual(metrics["reasoning_tokens"], {"count": 2, "sum": 35})
+
     def test_infrastructure_metrics_report_latest_values_and_counter_rates(self) -> None:
         samples = []
         for second, value in ((0, 100), (10, 150), (20, 5), (30, 25)):
